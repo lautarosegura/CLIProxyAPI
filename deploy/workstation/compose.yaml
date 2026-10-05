@@ -1,0 +1,16 @@
+services:
+  cli-proxy-api:
+    image: ghcr.io/lautarosegura/cli-proxy-api:latest
+    container_name: cli-proxy-api
+    command: ["./CLIProxyAPI", "--config", "/CLIProxyAPI/data/config.yaml"]
+    environment:
+      TZ: America/Argentina/Buenos_Aires
+    ports:
+      # Loopback only; other devices reach it through `tailscale serve`.
+      - "127.0.0.1:8317:8317"
+      - "127.0.0.1:1455:1455"    # Codex OAuth callback
+      - "127.0.0.1:54545:54545"  # Claude OAuth callback
+    volumes:
+      - ./data:/CLIProxyAPI/data          # config.yaml + static/management.html
+      - ./auths:/root/.cli-proxy-api      # credentials + session-affinity.sab
+    restart: unless-stopped

@@ -1,0 +1,22 @@
+config-version: 8
+server:
+  host: ""
+  port: 8317
+management:
+# Required with Docker: requests reach the container from the bridge IP, never loopback.
+  allow-remote: true
+  secret-key: "<bcrypt hash of the management key, or plaintext — the server hashes it on start>"
+  panel-github-repository: "https://github.com/lautarosegura/Cli-Proxy-API-Management-Center"
+access:
+  api-keys:
+    - "<client API key>"
+oauth:
+  auth-dir: "/root/.cli-proxy-api"
+routing:
+  strategy: "soonest-reset"
+  session-affinity: true
+  session-affinity-ttl: "24h"
+  session-affinity-max-retries: 2
+upstream:
+  codex:
+    websockets: true
