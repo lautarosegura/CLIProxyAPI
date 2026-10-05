@@ -216,12 +216,14 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 	didRefreshOnUnauthorized := false
 	var sticky *sessionStickyRetry
 	if allowRetry && !ephemeralResult {
-		sticky = m.sessionStickyRetryFor(opts.Metadata, auth)
+		sticky = m.sessionStickyRetryFor(ctx, opts.Metadata, auth)
 	}
+	// hasAlternativeModel reports whether the current attempt has a later pool model to try.
+	hasAlternativeModel := false
 	// retrySticky records a transient pre-output failure on the established binding without
 	// cooling the credential, then waits before retrying the same model on the same auth.
 	retrySticky := func(ctx context.Context, err error, resultModel string, execOpts cliproxyexecutor.Options, chunks <-chan cliproxyexecutor.StreamChunk) (bool, error) {
-		if !m.shouldRetrySessionSticky(sticky, auth, err) {
+		if !m.shouldRetrySessionSticky(sticky, auth, err, hasAlternativeModel) {
 			return false, nil
 		}
 		discardStreamChunks(chunks)
@@ -233,6 +235,7 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 	}
 	for idx := 0; idx < len(execModels); idx++ {
 		execModel := execModels[idx]
+		hasAlternativeModel = idx < len(execModels)-1
 		ctx = newUpstreamAttemptContext(ctx)
 		resultModel := m.stateModelForExecution(auth, routeModel, execModel, pooled)
 		execReq := req

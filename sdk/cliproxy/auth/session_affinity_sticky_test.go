@@ -26,6 +26,8 @@ type stickyScriptExecutor struct {
 	mu      sync.Mutex
 	scripts map[string][]stickyStep
 	calls   map[string]int
+	// budgetSeen records whether an attempt ran with a request-scoped sticky budget.
+	budgetSeen bool
 }
 
 func newStickyScriptExecutor(provider string) *stickyScriptExecutor {
@@ -58,7 +60,15 @@ func (e *stickyScriptExecutor) callCount(authID string) int {
 
 func (e *stickyScriptExecutor) Identifier() string { return e.provider }
 
-func (e *stickyScriptExecutor) Execute(_ context.Context, auth *Auth, _ cliproxyexecutor.Request, _ cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+func (e *stickyScriptExecutor) recordBudget(ctx context.Context) {
+	_, ok := ctx.Value(sessionStickyBudgetKey{}).(*sessionStickyBudget)
+	e.mu.Lock()
+	e.budgetSeen = e.budgetSeen || ok
+	e.mu.Unlock()
+}
+
+func (e *stickyScriptExecutor) Execute(ctx context.Context, auth *Auth, _ cliproxyexecutor.Request, _ cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+	e.recordBudget(ctx)
 	step := e.next(auth.ID)
 	if step.err != nil {
 		return cliproxyexecutor.Response{}, step.err
@@ -66,7 +76,8 @@ func (e *stickyScriptExecutor) Execute(_ context.Context, auth *Auth, _ cliproxy
 	return cliproxyexecutor.Response{Payload: []byte(auth.ID)}, nil
 }
 
-func (e *stickyScriptExecutor) ExecuteStream(_ context.Context, auth *Auth, _ cliproxyexecutor.Request, _ cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
+func (e *stickyScriptExecutor) ExecuteStream(ctx context.Context, auth *Auth, _ cliproxyexecutor.Request, _ cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
+	e.recordBudget(ctx)
 	step := e.next(auth.ID)
 	if step.err != nil {
 		return nil, step.err
@@ -88,8 +99,12 @@ func (e *stickyScriptExecutor) Refresh(_ context.Context, auth *Auth) (*Auth, er
 	return auth, nil
 }
 
-func (e *stickyScriptExecutor) CountTokens(context.Context, *Auth, cliproxyexecutor.Request, cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
-	return cliproxyexecutor.Response{}, nil
+func (e *stickyScriptExecutor) CountTokens(_ context.Context, auth *Auth, _ cliproxyexecutor.Request, _ cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+	step := e.next(auth.ID)
+	if step.err != nil {
+		return cliproxyexecutor.Response{}, step.err
+	}
+	return cliproxyexecutor.Response{Payload: []byte(auth.ID)}, nil
 }
 
 func (e *stickyScriptExecutor) HttpRequest(context.Context, *Auth, *http.Request) (*http.Response, error) {
@@ -101,6 +116,13 @@ type stickyCredentialQuotaError struct{}
 func (stickyCredentialQuotaError) Error() string            { return "usage_limit_reached" }
 func (stickyCredentialQuotaError) StatusCode() int          { return http.StatusTooManyRequests }
 func (stickyCredentialQuotaError) IsCredentialScoped() bool { return true }
+
+// stickyRateLimitError is a model-level 429 such as an ordinary Claude rate_limit_error.
+type stickyRateLimitError struct{ retryAfter *time.Duration }
+
+func (stickyRateLimitError) Error() string                { return "rate_limit_error" }
+func (stickyRateLimitError) StatusCode() int              { return http.StatusTooManyRequests }
+func (e stickyRateLimitError) RetryAfter() *time.Duration { return e.retryAfter }
 
 type stickyFixture struct {
 	manager  *Manager
@@ -451,6 +473,21 @@ func TestSessionAffinityBoundPickToleratesTransientCooldownOnly(t *testing.T) {
 			t.Fatalf("unbound request served by %q (%v), want %q while the bound credential cools", got, errExec, f.authB)
 		}
 	})
+	t.Run("short rate limit cooldown from unrelated traffic", func(t *testing.T) {
+		f := newStickyFixture(t, 2)
+		f.establish(t)
+		retryAfter := 15 * time.Second
+		f.manager.MarkResult(context.Background(), Result{AuthID: f.authA, Provider: f.provider, Model: f.model, RetryAfter: &retryAfter, Error: &Error{HTTPStatus: http.StatusTooManyRequests, Message: "rate limited"}})
+		if !f.authBlocked(t, f.authA) {
+			t.Fatal("expected unrelated rate limit to cool the credential")
+		}
+
+		got, errExec := f.execute(t, f.sessionOpts())
+		if errExec != nil || got != f.authA {
+			t.Fatalf("bound session served by %q (%v), want %q", got, errExec, f.authA)
+		}
+		f.requireBound(t, f.authA)
+	})
 	t.Run("quota cooldown fails over", func(t *testing.T) {
 		f := newStickyFixture(t, 2)
 		f.establish(t)
@@ -490,6 +527,7 @@ func TestSessionStickyRetryHelpers(t *testing.T) {
 		t.Fatalf("large max retries = %d, want %d", got, MaxSessionAffinityMaxRetries)
 	}
 
+	shortWait, longWait := 3*time.Second, 10*time.Minute
 	for _, tc := range []struct {
 		err  error
 		want bool
@@ -499,15 +537,187 @@ func TestSessionStickyRetryHelpers(t *testing.T) {
 		{&Error{HTTPStatus: http.StatusRequestTimeout}, true},
 		{&Error{Code: "empty_stream"}, true},
 		{errors.New("read tcp 1.2.3.4:443: connection reset by peer"), true},
-		{&Error{HTTPStatus: http.StatusTooManyRequests}, false},
+		{&Error{HTTPStatus: http.StatusTooManyRequests}, true},
+		{stickyRateLimitError{retryAfter: &shortWait}, true},
+		{stickyRateLimitError{retryAfter: &longWait}, false},
 		{&Error{HTTPStatus: http.StatusUnauthorized}, false},
 		{&Error{HTTPStatus: http.StatusForbidden}, false},
 		{&Error{HTTPStatus: http.StatusBadRequest}, false},
 		{stickyCredentialQuotaError{}, false},
 		{context.Canceled, false},
 	} {
-		if got := isSessionStickyRetryableError(tc.err); got != tc.want {
-			t.Fatalf("isSessionStickyRetryableError(%v) = %t, want %t", tc.err, got, tc.want)
+		if _, got := sessionStickyRetryWait(tc.err); got != tc.want {
+			t.Fatalf("sessionStickyRetryWait(%v) = %t, want %t", tc.err, got, tc.want)
+		}
+	}
+}
+
+func TestSessionStickyRetryShortRateLimitWaitsOnBoundCredential(t *testing.T) {
+	f := newStickyFixture(t, 2)
+	f.establish(t)
+
+	retryAfter := 3 * time.Second
+	f.exec.script(f.authA, stickyStep{err: stickyRateLimitError{retryAfter: &retryAfter}})
+	got, errExec := f.execute(t, f.sessionOpts())
+	if errExec != nil {
+		t.Fatalf("Execute failed: %v", errExec)
+	}
+	if got != f.authA {
+		t.Fatalf("request served by %q, want bound credential %q", got, f.authA)
+	}
+	if calls := f.exec.callCount(f.authB); calls != 0 {
+		t.Fatalf("other credential calls = %d, want 0", calls)
+	}
+	if delays := f.recordedDelays(); len(delays) != 1 || delays[0] != retryAfter {
+		t.Fatalf("sticky delays = %v, want [%s] from the upstream retry hint", delays, retryAfter)
+	}
+	f.requireBound(t, f.authA)
+	if f.authBlocked(t, f.authA) {
+		t.Fatal("bound credential was cooled by a rate limit that was waited out")
+	}
+}
+
+func TestSessionStickyRetryLongRateLimitFailsOver(t *testing.T) {
+	f := newStickyFixture(t, 2)
+	f.establish(t)
+
+	retryAfter := 10 * time.Minute
+	f.exec.script(f.authA, stickyStep{err: stickyRateLimitError{retryAfter: &retryAfter}})
+	got, errExec := f.execute(t, f.sessionOpts())
+	if errExec != nil {
+		t.Fatalf("Execute failed: %v", errExec)
+	}
+	if got != f.authB || f.exec.callCount(f.authA) != 2 || len(f.recordedDelays()) != 0 {
+		t.Fatalf("served by %q after %d bound calls and delays %v; want immediate failover to %q", got, f.exec.callCount(f.authA), f.recordedDelays(), f.authB)
+	}
+	f.requireBound(t, f.authB)
+}
+
+func TestSessionStickyRetryBudgetSpansRequestRetryRounds(t *testing.T) {
+	f := newStickyFixture(t, 2)
+	f.establish(t)
+	if !f.exec.budgetSeen {
+		t.Fatal("Execute did not attach a request-scoped sticky budget")
+	}
+	f.exec.budgetSeen = false
+	stream, errStream := f.manager.ExecuteStream(context.Background(), []string{f.provider}, cliproxyexecutor.Request{Model: f.model}, f.sessionOpts())
+	if errStream != nil {
+		t.Fatalf("ExecuteStream failed: %v", errStream)
+	}
+	discardStreamChunks(stream.Chunks)
+	if !f.exec.budgetSeen {
+		t.Fatal("ExecuteStream did not attach a request-scoped sticky budget")
+	}
+
+	auth, ok := f.manager.GetByID(f.authA)
+	if !ok {
+		t.Fatalf("auth %s not found", f.authA)
+	}
+	metadata := map[string]any{sessionAffinityEstablishedAuthMetadataKey: f.authA}
+	transient := &Error{HTTPStatus: http.StatusInternalServerError, Message: "internal error"}
+
+	ctx := withSessionStickyBudget(context.Background())
+	firstRound := f.manager.sessionStickyRetryFor(ctx, metadata, auth)
+	for i := 0; i < 2; i++ {
+		if !f.manager.shouldRetrySessionSticky(firstRound, auth, transient, false) {
+			t.Fatalf("first round sticky retry %d refused", i+1)
+		}
+	}
+	if f.manager.shouldRetrySessionSticky(firstRound, auth, transient, false) {
+		t.Fatal("first round exceeded the sticky budget")
+	}
+	// A later request-retry round of the same request reselects the bound credential.
+	secondRound := f.manager.sessionStickyRetryFor(withSessionStickyBudget(ctx), metadata, auth)
+	if f.manager.shouldRetrySessionSticky(secondRound, auth, transient, false) {
+		t.Fatal("request-retry round reset the sticky budget of the same request")
+	}
+
+	nextRequest := f.manager.sessionStickyRetryFor(withSessionStickyBudget(context.Background()), metadata, auth)
+	if !f.manager.shouldRetrySessionSticky(nextRequest, auth, transient, false) {
+		t.Fatal("a new request did not get a fresh sticky budget")
+	}
+}
+
+func TestSessionAffinityCountTokensNeverMovesBinding(t *testing.T) {
+	count := func(t *testing.T, f *stickyFixture, opts cliproxyexecutor.Options) string {
+		t.Helper()
+		resp, errCount := f.manager.ExecuteCount(context.Background(), []string{f.provider}, cliproxyexecutor.Request{Model: f.model}, opts)
+		if errCount != nil {
+			t.Fatalf("ExecuteCount failed: %v", errCount)
+		}
+		return string(resp.Payload)
+	}
+
+	t.Run("uses the bound credential", func(t *testing.T) {
+		f := newStickyFixture(t, 2)
+		f.establish(t)
+		for i := 0; i < 3; i++ {
+			if got := count(t, f, f.sessionOpts()); got != f.authA {
+				t.Fatalf("count %d served by %q, want bound credential %q", i+1, got, f.authA)
+			}
+		}
+		f.requireBound(t, f.authA)
+	})
+	t.Run("failover keeps the thread binding", func(t *testing.T) {
+		f := newStickyFixture(t, 2)
+		f.establish(t)
+		f.exec.script(f.authA, stickyStep{err: &Error{HTTPStatus: http.StatusForbidden, Message: "forbidden"}})
+		if got := count(t, f, f.sessionOpts()); got != f.authB {
+			t.Fatalf("count served by %q, want failover credential %q", got, f.authB)
+		}
+		f.requireBound(t, f.authA)
+	})
+	t.Run("cold session stays unbound", func(t *testing.T) {
+		f := newStickyFixture(t, 2)
+		count(t, f, f.sessionOpts())
+		if got, status := f.affinity.LookupAffinity("mixed", f.model, f.session); status == "bound" {
+			t.Fatalf("count bound a cold session to %q", got)
+		}
+	})
+}
+
+func TestSessionStickyRateLimitPrefersFreePoolModels(t *testing.T) {
+	f := newStickyFixture(t, 2)
+	auth, ok := f.manager.GetByID(f.authA)
+	if !ok {
+		t.Fatalf("auth %s not found", f.authA)
+	}
+	metadata := map[string]any{sessionAffinityEstablishedAuthMetadataKey: f.authA}
+	retryAfter := 3 * time.Second
+	rateLimited := stickyRateLimitError{retryAfter: &retryAfter}
+
+	sticky := f.manager.sessionStickyRetryFor(context.Background(), metadata, auth)
+	if f.manager.shouldRetrySessionSticky(sticky, auth, rateLimited, true) {
+		t.Fatal("rate-limited pool model was retried while another pool model remained")
+	}
+	if !f.manager.shouldRetrySessionSticky(sticky, auth, rateLimited, false) {
+		t.Fatal("rate-limited last pool model was not retried on the bound credential")
+	}
+	if !f.manager.shouldRetrySessionSticky(sticky, auth, &Error{HTTPStatus: http.StatusInternalServerError}, true) {
+		t.Fatal("transient failure lost its sticky retry inside a pool")
+	}
+
+	now := time.Now()
+	cooled := &Auth{ID: "pool-auth", Provider: f.provider, Status: StatusActive, ModelStates: map[string]*ModelState{
+		"pool-m1": {Status: StatusError, Quota: QuotaState{Exceeded: true, Reason: "quota", NextRecoverAt: now.Add(10 * time.Second)}, NextRetryAfter: now.Add(10 * time.Second)},
+	}}
+	got := f.manager.filterExecutionModelsWithTolerance(cooled, "pool-route", []string{"pool-m1", "pool-m2"}, true, true)
+	if len(got) != 2 || got[0] != "pool-m2" || got[1] != "pool-m1" {
+		t.Fatalf("pool order = %v, want free model first then the briefly cooled one", got)
+	}
+	if got := f.manager.filterExecutionModelsWithTolerance(cooled, "pool-route", []string{"pool-m1", "pool-m2"}, true, false); len(got) != 1 || got[0] != "pool-m2" {
+		t.Fatalf("unbound pool models = %v, want only the free model", got)
+	}
+}
+
+func TestSessionAffinityShortRateLimitCooldownStillSkippedForUnboundTraffic(t *testing.T) {
+	f := newStickyFixture(t, 2)
+	retryAfter := 15 * time.Second
+	f.manager.MarkResult(context.Background(), Result{AuthID: f.authA, Provider: f.provider, Model: f.model, RetryAfter: &retryAfter, Error: &Error{HTTPStatus: http.StatusTooManyRequests, Message: "rate limited"}})
+	for i := 0; i < 3; i++ {
+		got, errExec := f.execute(t, cliproxyexecutor.Options{})
+		if errExec != nil || got != f.authB {
+			t.Fatalf("unbound request %d served by %q (%v), want %q", i+1, got, errExec, f.authB)
 		}
 	}
 }

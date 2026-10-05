@@ -958,6 +958,9 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 	opts.Metadata[cliproxyexecutor.SessionAffinityModelMetadataKey] = model
 	// Only a pick that reuses an existing binding marks the request as established.
 	delete(opts.Metadata, sessionAffinityEstablishedAuthMetadataKey)
+	if isSessionAffinityReadOnly(opts.Metadata) {
+		return s.pickReadOnly(ctx, provider, model, opts, auths)
+	}
 
 	// Explicit harness identities are absolute authority. The LCP matcher is only
 	// consulted when no header, body, or execution-session identity is present.
@@ -1442,7 +1445,7 @@ func (s *SessionAffinitySelector) LookupAffinity(provider, model, sessionID stri
 
 // OnResult handles session affinity binding or release based on execution outcome.
 func (s *SessionAffinitySelector) OnResult(res Result) {
-	if s == nil || res.AuthID == "" {
+	if s == nil || res.AuthID == "" || isSessionAffinityReadOnly(res.Options.Metadata) {
 		return
 	}
 

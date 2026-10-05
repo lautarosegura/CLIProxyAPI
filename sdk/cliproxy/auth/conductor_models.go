@@ -313,23 +313,28 @@ func (m *Manager) filterExecutionModelsWithTolerance(auth *Auth, routeModel stri
 	}
 	now := time.Now()
 	out := make([]string, 0, len(candidates))
+	// Tolerated models still sit in a cooldown, so free pool models are tried first.
+	var tolerated []string
 	for _, upstreamModel := range candidates {
 		stateModel := m.stateModelForExecution(auth, routeModel, upstreamModel, pooled)
 		blocked, _, _ := isAuthBlockedForModel(auth, stateModel, now)
-		if blocked && !(tolerateTransient && isAuthOnlyTransientlyCooledForModel(auth, stateModel, now)) {
+		if blocked {
+			if tolerateTransient && isAuthOnlyTransientlyCooledForModel(auth, stateModel, now) {
+				tolerated = append(tolerated, upstreamModel)
+			}
 			continue
 		}
 		out = append(out, upstreamModel)
 	}
-	return out
+	return append(out, tolerated...)
 }
 
 // preparedExecutionModelsForSelection resolves execution models for a picked auth. The
-// established session binding tolerates transient-error cooldowns (see
-// includeSessionBoundTransientAuthLocked); every other pick uses regular filtering.
+// established session binding tolerates transient-error and short rate-limit cooldowns (see
+// isAuthOnlyTransientlyCooledForModel); every other pick uses regular filtering.
 func (m *Manager) preparedExecutionModelsForSelection(auth *Auth, routeModel string, metadata map[string]any) ([]string, bool, OAuthModelAliasResult, *apiKeyModelRoutingSnapshot) {
 	candidates, pooled, aliasResult, routing := m.executionModelCandidatesWithAlias(auth, routeModel)
-	tolerateTransient := m.sessionStickyRetryFor(metadata, auth) != nil
+	_, tolerateTransient := m.sessionStickyApplies(metadata, auth)
 	return m.filterExecutionModelsWithTolerance(auth, routeModel, candidates, pooled, tolerateTransient), pooled, aliasResult, routing
 }
 

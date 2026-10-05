@@ -130,6 +130,7 @@ func (m *Manager) Execute(ctx context.Context, providers []string, req cliproxye
 		resp, errHome := m.executeHome(ctx, normalized, req, opts, false)
 		return resp, unwrapExecutionBoundaryError(errHome)
 	}
+	ctx = withSessionStickyBudget(ctx)
 
 	defaultRequestRetry, maxRetryCredentials, maxWait := m.retrySettings()
 
@@ -182,6 +183,7 @@ func (m *Manager) Execute(ctx context.Context, providers []string, req cliproxye
 func (m *Manager) ExecuteCount(ctx context.Context, providers []string, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
 	ctx = cliproxyexecutor.WithRequestProxyURL(ctx, opts.ProxyURL)
 	req, opts = cliproxysession.Enrich(req, opts)
+	opts = withSessionAffinityReadOnly(opts)
 	normalized := m.normalizeProviders(providers)
 	if len(normalized) == 0 {
 		return cliproxyexecutor.Response{}, &Error{Code: "provider_not_found", Message: "no provider supplied"}
@@ -244,6 +246,7 @@ func (m *Manager) ExecuteStream(ctx context.Context, providers []string, req cli
 	if len(normalized) == 0 {
 		return nil, &Error{Code: "provider_not_found", Message: "no provider supplied"}
 	}
+	ctx = withSessionStickyBudget(ctx)
 
 	defaultRequestRetry, maxRetryCredentials, maxWait := m.retrySettings()
 
@@ -555,7 +558,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 		executor = executorForAuth(executor, auth)
 		var authErr error
 		didRefreshOnUnauthorized := false
-		sticky := m.sessionStickyRetryFor(pickOpts.Metadata, auth)
+		sticky := m.sessionStickyRetryFor(ctx, pickOpts.Metadata, auth)
 		for modelIndex := 0; modelIndex < len(models); modelIndex++ {
 			upstreamModel := models[modelIndex]
 			execCtx = newUpstreamAttemptContext(execCtx)
@@ -630,7 +633,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 			if errCancel := claudeOAuthRequestCancellation(execCtx, auth, errExec); errCancel != nil {
 				return cliproxyexecutor.Response{}, errCancel
 			}
-			if errExec != nil && m.shouldRetrySessionSticky(sticky, auth, errExec) {
+			if errExec != nil && m.shouldRetrySessionSticky(sticky, auth, errExec, modelIndex < len(models)-1) {
 				stickyResult := Result{AuthID: auth.ID, Provider: provider, Model: resultModel, RouteModel: routeModel, Options: execOpts}
 				if errWait := m.awaitSessionStickyRetry(execCtx, sticky, stickyResult, errExec); errWait != nil {
 					return cliproxyexecutor.Response{}, errWait
