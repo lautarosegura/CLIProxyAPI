@@ -143,11 +143,13 @@ routing:
   # For OAuth/file credentials, add a top-level numeric "weight" field to the auth JSON.
   # soonest-reset ("use it or lose it") prefers the credential whose weekly quota window
   # resets soonest, using quota headers observed on upstream responses (Claude 7d window,
-  # Codex weekly window). Credentials without weekly data yet (e.g. right after a restart,
-  # or a reset time that already passed) are used first, round-robin, so their reset time
-  # is learned; exhausted credentials are used last. Providers without quota headers behave
-  # like round-robin. Priority tiers still apply first, and with session-affinity enabled
-  # only new bindings use this ranking: bound sessions keep their credential.
+  # Codex weekly window). Order: Claude/Codex subscription credentials without weekly data
+  # yet (e.g. right after a restart, or a reset time that already passed) round-robin so
+  # their reset time is learned; then subscription credentials by soonest weekly reset;
+  # then API keys and providers without quota headers, round-robin; exhausted credentials
+  # last. A pool of only API keys or non-reporting providers behaves like round-robin.
+  # Priority tiers still apply first, and with session-affinity enabled only new bindings
+  # use this ranking: bound sessions keep their credential.
   # Enable universal session-sticky routing for all clients.
   # Explicit Claude Code, Codex, OpenCode, and pi session headers are preferred,
   # followed by prompt_cache_key, Responses conversation IDs, legacy body IDs,

@@ -25,17 +25,20 @@ const (
 // responses (Claude unified 7d headers, Codex primary/secondary windows).
 //
 // Ranking within the candidate tier:
-//  1. Credentials without usable weekly data (no signals yet, unparsable, or a reset that
-//     already passed) come first and rotate round-robin, so their reset time gets learned.
+//  1. Reporting credentials (Claude/Codex OAuth or file credentials) without usable weekly
+//     data (no signals yet, unparsable, or a reset that already passed) come first and
+//     rotate round-robin, so their reset time gets learned.
 //  2. Credentials with remaining weekly quota, by reset time ascending. Resets within
 //     soonestResetTieTolerance tie; ties prefer lower remaining quota, then auth ID.
-//  3. Credentials whose weekly quota is exhausted, by reset time ascending, then auth ID.
+//  3. Non-reporting credentials (API keys of any provider and providers that never emit
+//     weekly signals) rotate round-robin, so expiring subscription quota is spent first.
+//  4. Credentials whose weekly quota is exhausted, by reset time ascending, then auth ID.
 //
-// Providers that never report quota signals therefore behave like round-robin.
+// A pool made only of non-reporting credentials therefore behaves like round-robin.
 type SoonestResetSelector struct {
-	mu          sync.Mutex
-	lastUnknown map[string]string
-	maxKeys     int
+	mu         sync.Mutex
+	lastPicked map[string]string
+	maxKeys    int
 	// nowFunc overrides the clock for tests.
 	nowFunc func() time.Time
 }
@@ -58,10 +61,14 @@ func (s *SoonestResetSelector) Pick(ctx context.Context, provider, model string,
 	}
 	available = preferCodexWebsocketAuths(ctx, provider, available)
 
-	var unknown []*Auth
+	var unknown, nonReporting []*Auth
 	var withQuota, exhausted []soonestResetCandidate
 	for _, candidate := range available {
 		if candidate == nil {
+			continue
+		}
+		if !reportsWeeklyQuota(candidate) {
+			nonReporting = append(nonReporting, candidate)
 			continue
 		}
 		window, ok := weeklyQuotaWindowForAuth(candidate, model, now)
@@ -76,10 +83,13 @@ func (s *SoonestResetSelector) Pick(ctx context.Context, provider, model string,
 	}
 
 	if len(unknown) > 0 {
-		return s.rotateUnknown(provider, model, unknown), nil
+		return s.rotate(provider, model, "unknown", unknown), nil
 	}
 	if picked := pickSoonestWithQuota(withQuota); picked != nil {
 		return picked, nil
+	}
+	if len(nonReporting) > 0 {
+		return s.rotate(provider, model, "non-reporting", nonReporting), nil
 	}
 	if picked := pickSoonestExhausted(exhausted); picked != nil {
 		return picked, nil
@@ -99,29 +109,44 @@ func (s *SoonestResetSelector) now() time.Time {
 	return time.Now()
 }
 
-// rotateUnknown round-robins across credentials without weekly data, resuming after the
-// previously picked one so repeated picks spread across them.
-func (s *SoonestResetSelector) rotateUnknown(provider, model string, unknown []*Auth) *Auth {
-	sorted := make([]*Auth, len(unknown))
-	copy(sorted, unknown)
+// rotate round-robins across one rank group, resuming after the credential previously
+// picked from that group so repeated picks spread across it.
+func (s *SoonestResetSelector) rotate(provider, model, group string, candidates []*Auth) *Auth {
+	sorted := make([]*Auth, len(candidates))
+	copy(sorted, candidates)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].ID < sorted[j].ID })
 
-	key := provider + ":" + canonicalModelKey(model)
+	key := provider + ":" + canonicalModelKey(model) + ":" + group
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	limit := s.maxKeys
 	if limit <= 0 {
 		limit = 4096
 	}
-	if s.lastUnknown == nil {
-		s.lastUnknown = make(map[string]string)
+	if s.lastPicked == nil {
+		s.lastPicked = make(map[string]string)
 	}
-	if _, ok := s.lastUnknown[key]; !ok && len(s.lastUnknown) >= limit {
-		s.lastUnknown = make(map[string]string)
+	if _, ok := s.lastPicked[key]; !ok && len(s.lastPicked) >= limit {
+		s.lastPicked = make(map[string]string)
 	}
-	picked := sorted[successorIndex(sorted, s.lastUnknown[key])]
-	s.lastUnknown[key] = picked.ID
+	picked := sorted[successorIndex(sorted, s.lastPicked[key])]
+	s.lastPicked[key] = picked.ID
 	return picked
+}
+
+// reportsWeeklyQuota reports whether the credential is expected to carry weekly quota
+// signals: Claude and Codex subscription (OAuth/file) credentials. API-key credentials
+// and other providers never do.
+func reportsWeeklyQuota(auth *Auth) bool {
+	if auth == nil || auth.AuthKind() == AuthKindAPIKey {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(auth.Provider)) {
+	case "claude", "codex":
+		return true
+	default:
+		return false
+	}
 }
 
 // pickSoonestWithQuota returns the credential with the earliest weekly reset. Resets within

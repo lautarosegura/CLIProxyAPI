@@ -337,6 +337,71 @@ func TestSoonestResetSelectorWithoutSignalsBehavesRoundRobin(t *testing.T) {
 	}
 }
 
+func claudeAPIKeyAuth(id string) *Auth {
+	return &Auth{ID: id, Provider: "claude", Attributes: map[string]string{AttributeAPIKey: "sk-" + id}}
+}
+
+func TestSoonestResetSelectorSpendsSubscriptionBeforeAPIKeys(t *testing.T) {
+	selector := newSoonestResetTestSelector()
+	apiKey := claudeAPIKeyAuth("a-api-key")
+	// Even a weekly-looking snapshot does not move an API key ahead of subscription quota.
+	apiKey.Quota = claudeQuotaAuth("ignored", "0.9", time.Minute).Quota
+	oauthKnown := claudeQuotaAuth("b-oauth-known", "0.0", 96*time.Hour)
+	oauthUnknown := &Auth{ID: "c-oauth-unknown", Provider: "claude", Metadata: map[string]any{"email": "user@example.com"}}
+	exhausted := claudeQuotaAuth("d-oauth-exhausted", "1.0", time.Hour)
+
+	if got := pickSoonestReset(t, selector, "claude", []*Auth{apiKey, oauthKnown, oauthUnknown, exhausted}); got != "c-oauth-unknown" {
+		t.Fatalf("pick = %q, want c-oauth-unknown", got)
+	}
+	if got := pickSoonestReset(t, selector, "claude", []*Auth{apiKey, oauthKnown, exhausted}); got != "b-oauth-known" {
+		t.Fatalf("pick = %q, want b-oauth-known", got)
+	}
+	if got := pickSoonestReset(t, selector, "claude", []*Auth{apiKey, exhausted}); got != "a-api-key" {
+		t.Fatalf("pick = %q, want a-api-key ahead of exhausted subscription", got)
+	}
+
+	// Non-reporting credentials rotate among themselves once subscription quota is gone.
+	secondKey := claudeAPIKeyAuth("e-api-key")
+	want := []string{"e-api-key", "a-api-key", "e-api-key"}
+	for i, wantID := range want {
+		if got := pickSoonestReset(t, selector, "claude", []*Auth{apiKey, secondKey, exhausted}); got != wantID {
+			t.Fatalf("pick #%d = %q, want %q", i, got, wantID)
+		}
+	}
+}
+
+func TestSoonestResetSelectorAPIKeyOnlyPoolBehavesRoundRobin(t *testing.T) {
+	selector := newSoonestResetTestSelector()
+	auths := []*Auth{claudeAPIKeyAuth("key-c"), claudeAPIKeyAuth("key-a"), claudeAPIKeyAuth("key-b")}
+	auths[1].Quota = claudeQuotaAuth("ignored", "0.5", time.Hour).Quota
+	want := []string{"key-a", "key-b", "key-c", "key-a", "key-b", "key-c"}
+	for i, wantID := range want {
+		if got := pickSoonestReset(t, selector, "claude", auths); got != wantID {
+			t.Fatalf("pick #%d = %q, want %q", i, got, wantID)
+		}
+	}
+}
+
+func TestReportsWeeklyQuota(t *testing.T) {
+	tests := []struct {
+		name string
+		auth *Auth
+		want bool
+	}{
+		{name: "claude oauth", auth: &Auth{Provider: "claude", Metadata: map[string]any{"email": "a@b.c"}}, want: true},
+		{name: "codex file", auth: &Auth{Provider: "codex"}, want: true},
+		{name: "claude api key", auth: claudeAPIKeyAuth("k"), want: false},
+		{name: "codex explicit api key kind", auth: &Auth{Provider: "codex", Attributes: map[string]string{AttributeAuthKind: AuthKindAPIKey}}, want: false},
+		{name: "gemini oauth", auth: &Auth{Provider: "gemini-cli", Metadata: map[string]any{"email": "a@b.c"}}, want: false},
+		{name: "nil", auth: nil, want: false},
+	}
+	for _, tt := range tests {
+		if got := reportsWeeklyQuota(tt.auth); got != tt.want {
+			t.Fatalf("%s: reportsWeeklyQuota() = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
 func TestSoonestResetSelectorSkipsBlockedAndKeepsPriorityTier(t *testing.T) {
 	selector := newSoonestResetTestSelector()
 	cooling := claudeQuotaAuth("a-cooling", "0.1", time.Hour)
