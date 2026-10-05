@@ -252,8 +252,8 @@ func (s *ConfigSynthesizer) synthesizeCodexStyleKeys(ctx *SynthesisContext, entr
 		if baseURL != "" {
 			attrs["base_url"] = baseURL
 		}
-		if entry.Websockets {
-			attrs["websockets"] = "true"
+		if entry.Websockets != nil {
+			attrs[coreauth.AttributeWebsockets] = strconv.FormatBool(*entry.Websockets)
 		}
 		if provider == "codex" && entry.AlphaSearch {
 			attrs[coreauth.AttributeCodexAlphaSearch] = "true"

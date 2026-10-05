@@ -217,6 +217,11 @@ type CodexConfig struct {
 	// ResponseSteering enables full-duplex Codex WebSockets, bound to one
 	// upstream model/account/socket for their entire lifetime. Default is false.
 	ResponseSteering bool `yaml:"response-steering" json:"response-steering"`
+	// Websockets is the default Responses API websocket transport setting for every Codex
+	// credential (OAuth files and api-keys.codex entries). A credential-level "websockets"
+	// value always overrides it. The upstream websocket is only used when the downstream
+	// request is itself a Responses websocket. Default is false.
+	Websockets bool `yaml:"websockets" json:"websockets"`
 }
 
 // DefaultCodexStreamBootstrapTimeout is the default maximum duration to buffer bootstrap events.
@@ -646,8 +651,10 @@ type CodexKey struct {
 	// If empty, the default Codex API URL will be used.
 	BaseURL string `yaml:"base-url" json:"base-url"`
 
-	// Websockets enables the Responses API websocket transport for this credential.
-	Websockets bool `yaml:"websockets,omitempty" json:"websockets,omitempty"`
+	// Websockets optionally enables the Responses API websocket transport for this credential.
+	// True enables it; false explicitly disables it; omitted inherits the provider default
+	// (upstream.codex.websockets for Codex keys, disabled for other providers).
+	Websockets *bool `yaml:"websockets,omitempty" json:"websockets,omitempty"`
 
 	// AlphaSearch allows this Codex API key to serve the Alpha Search endpoint.
 	AlphaSearch bool `yaml:"alpha-search,omitempty" json:"alpha-search,omitempty"`

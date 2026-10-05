@@ -138,6 +138,29 @@ PackyCode provides special discounts for our software users: register using <a h
 
 CLIProxyAPI Guides: [https://help.router-for.me/](https://help.router-for.me/)
 
+### Codex CLI over the Responses WebSocket transport
+
+The proxy accepts Responses API WebSocket upgrades on `GET /v1/responses` and on the Codex
+direct alias `GET /backend-api/codex/responses` (the alias is compatible with Codex CLI's
+`chatgpt_base_url`). HTTP `POST` on the same paths keeps working. Authenticate with one of
+your `api-keys` via `Authorization: Bearer <key>`.
+
+To make every Codex credential use the faster upstream Codex WebSocket transport, enable the
+global default in `config.yaml`:
+
+```yaml
+upstream:
+  codex:
+    websockets: true
+```
+
+Per-credential values still win: `"websockets": false` in a Codex auth file, or
+`websockets: false` on an `api-keys.codex` key, keeps that credential on HTTP/SSE. The upstream
+WebSocket is used only when the client connects to the proxy over WebSocket; HTTP clients are
+served over HTTP/SSE. Point Codex CLI at the proxy base URL (for example
+`http://127.0.0.1:8317/v1`) as a Responses-API provider with WebSocket transport enabled; refer
+to the Codex CLI configuration reference for the exact provider setting names in your version.
+
 ## Management API
 
 see [MANAGEMENT_API.md](https://help.router-for.me/management/api)

@@ -32,7 +32,7 @@ func TestPickNextViaHomeDoesNotReusePinnedWebsocketAuthWithoutSelection(t *testi
 	auth.EnsureIndex()
 	manager.rememberHomeRuntimeAuth("session-1", auth)
 	cachedAuth, ok := manager.GetExecutionSessionAuthByID("session-1", "home-auth-1")
-	if !ok || cachedAuth == nil || !authWebsocketsEnabled(cachedAuth) {
+	if !ok || cachedAuth == nil || !WebsocketsEnabled(cachedAuth, false) {
 		t.Fatalf("GetExecutionSessionAuthByID() did not expose remembered websocket home auth: auth=%#v ok=%v", cachedAuth, ok)
 	}
 

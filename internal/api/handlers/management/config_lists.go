@@ -1534,6 +1534,7 @@ func (h *Handler) PatchCodexKey(c *gin.Context) {
 		Weight               json.RawMessage                  `json:"weight"`
 		Prefix               *string                          `json:"prefix"`
 		BaseURL              *string                          `json:"base-url"`
+		Websockets           json.RawMessage                  `json:"websockets"`
 		ProxyURL             *string                          `json:"proxy-url"`
 		AlphaSearch          *bool                            `json:"alpha-search"`
 		Models               *[]config.CodexModel             `json:"models"`
@@ -1601,6 +1602,9 @@ func (h *Handler) PatchCodexKey(c *gin.Context) {
 			return
 		}
 		entry.BaseURL = trimmed
+	}
+	if !applyOptionalBoolPatch(c, body.Value.Websockets, &entry.Websockets, "websockets") {
+		return
 	}
 	if body.Value.ProxyURL != nil {
 		entry.ProxyURL = strings.TrimSpace(*body.Value.ProxyURL)
@@ -1736,7 +1740,7 @@ func (h *Handler) PatchXAIKey(c *gin.Context) {
 		Weight              json.RawMessage                  `json:"weight"`
 		Prefix              *string                          `json:"prefix"`
 		BaseURL             *string                          `json:"base-url"`
-		Websockets          *bool                            `json:"websockets"`
+		Websockets          json.RawMessage                  `json:"websockets"`
 		ProxyURL            *string                          `json:"proxy-url"`
 		Models              *[]config.XAIModel               `json:"models"`
 		Headers             *map[string]string               `json:"headers"`
@@ -1803,8 +1807,8 @@ func (h *Handler) PatchXAIKey(c *gin.Context) {
 		}
 		entry.BaseURL = trimmed
 	}
-	if body.Value.Websockets != nil {
-		entry.Websockets = *body.Value.Websockets
+	if !applyOptionalBoolPatch(c, body.Value.Websockets, &entry.Websockets, "websockets") {
+		return
 	}
 	if body.Value.ProxyURL != nil {
 		entry.ProxyURL = strings.TrimSpace(*body.Value.ProxyURL)
@@ -2105,6 +2109,25 @@ func applyDisableCodexCloakingPatch(c *gin.Context, raw json.RawMessage, target 
 	var value bool
 	if errUnmarshal := json.Unmarshal(raw, &value); errUnmarshal != nil {
 		c.JSON(400, gin.H{"error": "disable-codex-cloaking must be a boolean or null"})
+		return false
+	}
+	*target = &value
+	return true
+}
+
+// applyOptionalBoolPatch applies a JSON-null-aware patch to an optional boolean:
+// an absent field is ignored, null clears the override, and a boolean sets it.
+func applyOptionalBoolPatch(c *gin.Context, raw json.RawMessage, target **bool, field string) bool {
+	if len(raw) == 0 {
+		return true
+	}
+	if strings.TrimSpace(string(raw)) == "null" {
+		*target = nil
+		return true
+	}
+	var value bool
+	if errUnmarshal := json.Unmarshal(raw, &value); errUnmarshal != nil {
+		c.JSON(400, gin.H{"error": field + " must be a boolean or null"})
 		return false
 	}
 	*target = &value

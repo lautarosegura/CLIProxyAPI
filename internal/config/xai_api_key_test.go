@@ -67,7 +67,7 @@ func TestParseConfigBytesXAIAPIKeyMatchesCodexShape(t *testing.T) {
 	if entry.BaseURL != "https://api.x.ai/v1" {
 		t.Fatalf("base-url = %q, want https://api.x.ai/v1", entry.BaseURL)
 	}
-	if !entry.Websockets {
+	if entry.Websockets == nil || !*entry.Websockets {
 		t.Fatal("websockets = false, want true")
 	}
 	if entry.ProxyURL != " http://proxy.local " {

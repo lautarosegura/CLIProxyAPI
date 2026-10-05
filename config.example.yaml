@@ -312,6 +312,13 @@ upstream:
     # Experimental full-duplex Codex Responses WebSocket steering (default: false).
     # Keeps one upstream account/model per socket; accepted input is never replayed.
     response-steering: false
+    # Default upstream Codex Responses WebSocket transport for every Codex credential
+    # (OAuth auth files and api-keys.codex entries) (default: false).
+    # A credential-level "websockets" value always wins, so set "websockets": false in an
+    # auth file or websockets: false on an API key to keep that credential on HTTP/SSE.
+    # The upstream WebSocket is only used when the downstream request is itself a Responses
+    # WebSocket (GET /v1/responses or /backend-api/codex/responses); HTTP clients keep HTTP/SSE.
+    websockets: false
     # Disable forcing the official Codex User-Agent and Originator headers on HTTP/SSE and WebSocket requests.
     disable-codex-cloaking: false
     # Hold back the frames that carry nothing the client has seen - the handshake (response.created,
@@ -626,7 +633,7 @@ upstream:
 #           weight: 5 # optional: weighted-round-robin share; omitted defaults to 1; maximum 1,000,000
 #           disable-codex-cloaking: false # optional: true disables cloaking; OAuth provider settings do not apply here
 #           alpha-search: false # optional: allow this key to serve /v1/alpha/search via base-url + /alpha/search
-#           websockets: false # optional: use the Codex upstream WebSocket transport
+#           websockets: false # optional: true/false overrides upstream.codex.websockets for this key; omit to inherit
 #
 #   # Claude API keys
 #

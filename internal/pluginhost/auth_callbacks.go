@@ -497,7 +497,7 @@ func (h *Host) buildHostAuthFileEntry(auth *coreauth.Auth) *pluginapi.HostAuthFi
 			entry.BaseURL = strings.TrimSpace(rawBaseURL)
 		}
 	}
-	if websockets, ok := authWebsocketsValue(auth); ok {
+	if websockets, ok := coreauth.ExplicitWebsockets(auth); ok {
 		entry.Websockets = websockets
 	}
 	return entry
@@ -599,24 +599,6 @@ func isRuntimeOnlyAuth(auth *coreauth.Auth) bool {
 		return false
 	}
 	return strings.EqualFold(strings.TrimSpace(auth.Attributes["runtime_only"]), "true")
-}
-
-func authWebsocketsValue(auth *coreauth.Auth) (bool, bool) {
-	if auth == nil {
-		return false, false
-	}
-	if auth.Attributes != nil {
-		if raw := strings.TrimSpace(auth.Attributes["websockets"]); raw != "" {
-			parsed, errParse := strconv.ParseBool(raw)
-			if errParse == nil {
-				return parsed, true
-			}
-		}
-	}
-	if auth.Metadata == nil {
-		return false, false
-	}
-	return parseWebsocketsValue(auth.Metadata["websockets"])
 }
 
 func parsePriorityValue(raw any) (int, bool) {

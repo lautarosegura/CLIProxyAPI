@@ -50,6 +50,8 @@ type authScheduler struct {
 	authGenerations     map[string]scheduledGenerationMeta
 	mixedCursors        map[string]int
 	mixedWeightedStates map[string]*smoothWeightedState
+	// codexWebsocketsDefault mirrors upstream.codex.websockets for websocket-only ready views.
+	codexWebsocketsDefault bool
 }
 
 // providerScheduler stores auth metadata and model shards for a single provider.
@@ -187,6 +189,44 @@ func (s *authScheduler) setSelector(selector Selector) {
 	s.strategy = selectorStrategy(selector)
 	clear(s.mixedCursors)
 	clear(s.mixedWeightedStates)
+}
+
+// setCodexWebsocketsDefault applies a new Codex websocket default and refreshes the cached
+// websocket eligibility of every scheduled auth so config reloads take effect immediately.
+func (s *authScheduler) setCodexWebsocketsDefault(enabled bool) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.codexWebsocketsDefault == enabled {
+		return
+	}
+	s.codexWebsocketsDefault = enabled
+	for _, providerState := range s.providers {
+		if providerState == nil {
+			continue
+		}
+		changed := false
+		for _, meta := range providerState.auths {
+			if meta == nil {
+				continue
+			}
+			websocketEnabled := WebsocketsEnabled(meta.auth, enabled)
+			if meta.websocketEnabled != websocketEnabled {
+				meta.websocketEnabled = websocketEnabled
+				changed = true
+			}
+		}
+		if !changed {
+			continue
+		}
+		for _, shard := range providerState.modelShards {
+			if shard != nil {
+				shard.rebuildIndexesLocked()
+			}
+		}
+	}
 }
 
 // isSchedulableAuth determines whether an auth can be scheduled by a provider scheduler,
@@ -839,7 +879,7 @@ func (s *authScheduler) upsertAuthRebuildLocked(auth *Auth, existingMetas map[st
 
 	providerState := s.ensureProviderLocked(providerKey)
 	regEpoch := registry.GetGlobalRegistry().ClientRegistrationEpoch(authID)
-	meta := buildScheduledAuthMetaWithModelSet(authToSchedule, supportedModelSetForAuth(authToSchedule.ID), regEpoch)
+	meta := buildScheduledAuthMetaWithModelSet(authToSchedule, supportedModelSetForAuth(authToSchedule.ID), regEpoch, s.codexWebsocketsDefault)
 	s.authProviders[authID] = providerKey
 	providerState.upsertAuthForModelsLocked(meta, nil, true, now)
 }
@@ -878,7 +918,7 @@ func (s *authScheduler) upsertAuthLifecycleLocked(auth *Auth, now time.Time) {
 
 	providerState := s.ensureProviderLocked(providerKey)
 	regEpoch := registry.GetGlobalRegistry().ClientRegistrationEpoch(authID)
-	meta := buildScheduledAuthMetaWithModelSet(auth, supportedModelSetForAuth(auth.ID), regEpoch)
+	meta := buildScheduledAuthMetaWithModelSet(auth, supportedModelSetForAuth(auth.ID), regEpoch, s.codexWebsocketsDefault)
 	s.authProviders[authID] = providerKey
 	providerState.upsertAuthForModelsLocked(meta, nil, true, now)
 }
@@ -960,7 +1000,7 @@ func (s *authScheduler) upsertAuthResultLocked(auth *Auth, targetModels []string
 		modelSet = supportedModelSetForAuth(auth.ID)
 	}
 
-	meta := buildScheduledAuthMetaWithModelSet(auth, modelSet, currentRegEpoch)
+	meta := buildScheduledAuthMetaWithModelSet(auth, modelSet, currentRegEpoch, s.codexWebsocketsDefault)
 	s.authProviders[authID] = providerKey
 
 	// Check whether credential-level availability transitioned between blocked and unblocked.
@@ -1029,17 +1069,8 @@ func (s *authScheduler) ensureProviderLocked(providerKey string) *providerSchedu
 	return providerState
 }
 
-// buildScheduledAuthMeta extracts the scheduling metadata needed for shard bookkeeping.
-func buildScheduledAuthMeta(auth *Auth) *scheduledAuthMeta {
-	var authID string
-	if auth != nil {
-		authID = auth.ID
-	}
-	regEpoch := registry.GetGlobalRegistry().ClientRegistrationEpoch(authID)
-	return buildScheduledAuthMetaWithModelSet(auth, supportedModelSetForAuth(authID), regEpoch)
-}
-
-func buildScheduledAuthMetaWithModelSet(auth *Auth, modelSet map[string]struct{}, regEpoch uint64) *scheduledAuthMeta {
+// buildScheduledAuthMetaWithModelSet extracts the scheduling metadata needed for shard bookkeeping.
+func buildScheduledAuthMetaWithModelSet(auth *Auth, modelSet map[string]struct{}, regEpoch uint64, codexWebsocketsDefault bool) *scheduledAuthMeta {
 	providerKey := executorKeyFromAuth(auth)
 	var clonedAuth *Auth
 	if auth != nil {
@@ -1050,7 +1081,7 @@ func buildScheduledAuthMetaWithModelSet(auth *Auth, modelSet map[string]struct{}
 		providerKey:       providerKey,
 		priority:          authPriority(auth),
 		weight:            authWeight(auth),
-		websocketEnabled:  authWebsocketsEnabled(auth),
+		websocketEnabled:  WebsocketsEnabled(auth, codexWebsocketsDefault),
 		supportedModelSet: modelSet,
 		registryEpoch:     regEpoch,
 	}

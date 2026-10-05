@@ -2,7 +2,6 @@ package openai
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -12,39 +11,10 @@ import (
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 )
 
-func websocketUpstreamSupportsIncrementalInput(attributes map[string]string, metadata map[string]any) bool {
-	if len(attributes) > 0 {
-		if raw := strings.TrimSpace(attributes["websockets"]); raw != "" {
-			parsed, errParse := strconv.ParseBool(raw)
-			if errParse == nil {
-				return parsed
-			}
-		}
-	}
-	if len(metadata) == 0 {
-		return false
-	}
-	raw, ok := metadata["websockets"]
-	if !ok || raw == nil {
-		return false
-	}
-	switch value := raw.(type) {
-	case bool:
-		return value
-	case string:
-		parsed, errParse := strconv.ParseBool(strings.TrimSpace(value))
-		if errParse == nil {
-			return parsed
-		}
-	default:
-	}
-	return false
-}
-
 func (h *OpenAIResponsesAPIHandler) websocketUpstreamSupportsIncrementalInputForModel(modelName string) bool {
 	auths, _ := h.responsesWebsocketAvailableAuthsForModel(modelName)
 	for _, auth := range auths {
-		if responsesWebsocketAuthSupportsIncrementalInput(auth) {
+		if h.responsesWebsocketAuthSupportsIncrementalInput(auth) {
 			return true
 		}
 	}
@@ -117,18 +87,23 @@ func (h *OpenAIResponsesAPIHandler) responsesWebsocketUsesUpstreamWebsocketPasst
 		} else if authProvider != provider {
 			return false
 		}
-		if !websocketUpstreamSupportsIncrementalInput(auth.Attributes, auth.Metadata) {
+		if !h.responsesWebsocketAuthSupportsIncrementalInput(auth) {
 			return false
 		}
 	}
 	return provider != ""
 }
 
-func responsesWebsocketAuthSupportsIncrementalInput(auth *coreauth.Auth) bool {
+// responsesWebsocketAuthSupportsIncrementalInput reports whether auth uses the upstream
+// websocket transport, resolved against the auth manager's current configuration.
+func (h *OpenAIResponsesAPIHandler) responsesWebsocketAuthSupportsIncrementalInput(auth *coreauth.Auth) bool {
 	if auth == nil {
 		return false
 	}
-	return websocketUpstreamSupportsIncrementalInput(auth.Attributes, auth.Metadata)
+	if h == nil || h.AuthManager == nil {
+		return coreauth.WebsocketsEnabled(auth, false)
+	}
+	return h.AuthManager.WebsocketsEnabled(auth)
 }
 
 func responsesWebsocketPinnedAuthMatchesModel(auth *coreauth.Auth, modelName string, pinnedModelKey string, homeRuntime bool) bool {

@@ -778,7 +778,7 @@ func (h *Handler) buildAuthFileEntryLocked(auth *coreauth.Auth, quotaSupported .
 	if weight, ok := authWeightValue(auth); ok {
 		entry[coreauth.AttributeWeight] = weight
 	}
-	if websockets, ok := authWebsocketsValue(auth); ok {
+	if websockets, ok := coreauth.ExplicitWebsockets(auth); ok {
 		entry["websockets"] = websockets
 	}
 	if requestRetry, ok := auth.RequestRetryOverride(); ok {
@@ -852,37 +852,6 @@ func authWeightValue(auth *coreauth.Auth) (int64, bool) {
 	}
 	weight, errWeight := credentialweight.ParseValue(rawWeight)
 	return weight, errWeight == nil
-}
-
-func authWebsocketsValue(auth *coreauth.Auth) (bool, bool) {
-	if auth == nil {
-		return false, false
-	}
-	if auth.Attributes != nil {
-		if raw := strings.TrimSpace(auth.Attributes["websockets"]); raw != "" {
-			parsed, errParse := strconv.ParseBool(raw)
-			if errParse == nil {
-				return parsed, true
-			}
-		}
-	}
-	if auth.Metadata == nil {
-		return false, false
-	}
-	raw, ok := auth.Metadata["websockets"]
-	if !ok || raw == nil {
-		return false, false
-	}
-	switch v := raw.(type) {
-	case bool:
-		return v, true
-	case string:
-		parsed, errParse := strconv.ParseBool(strings.TrimSpace(v))
-		if errParse == nil {
-			return parsed, true
-		}
-	}
-	return false, false
 }
 
 func authProjectID(auth *coreauth.Auth) string {
