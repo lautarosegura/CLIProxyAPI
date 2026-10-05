@@ -665,7 +665,11 @@ func selectionArgForSelector(selector Selector, routeModel string) string {
 func selectorContextForAvailableAuths(ctx context.Context, selector Selector, routeModel string) context.Context {
 	ctx = withWeightedSelectorStateModel(ctx, selector, routeModel)
 	if !isBuiltInSelector(selector) {
-		if _, sessionAffinity := selector.(*SessionAffinitySelector); !sessionAffinity {
+		switch selector.(type) {
+		case *SessionAffinitySelector, *SoonestResetSelector:
+			// These selectors run on the legacy path but still trust the manager's
+			// alias-aware availability pass instead of rechecking the route model.
+		default:
 			return ctx
 		}
 	}
