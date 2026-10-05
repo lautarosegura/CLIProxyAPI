@@ -157,9 +157,22 @@ upstream:
 Per-credential values still win: `"websockets": false` in a Codex auth file, or
 `websockets: false` on an `api-keys.codex` key, keeps that credential on HTTP/SSE. The upstream
 WebSocket is used only when the client connects to the proxy over WebSocket; HTTP clients are
-served over HTTP/SSE. Point Codex CLI at the proxy base URL (for example
-`http://127.0.0.1:8317/v1`) as a Responses-API provider with WebSocket transport enabled; refer
-to the Codex CLI configuration reference for the exact provider setting names in your version.
+served over HTTP/SSE.
+
+To make Codex CLI connect over WebSocket, define the proxy as a Responses provider with
+`supports_websockets = true` in `~/.codex/config.toml` (Codex opens the socket on
+`<base_url>/responses`):
+
+```toml
+model_provider = "cliproxy"
+
+[model_providers.cliproxy]
+name = "CLIProxyAPI"
+base_url = "http://127.0.0.1:8317/v1"
+env_key = "CLIPROXY_API_KEY" # one of your api-keys
+wire_api = "responses"
+supports_websockets = true
+```
 
 ## Management API
 
