@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/api"
@@ -93,6 +94,7 @@ func (s *Service) Run(ctx context.Context) error {
 			includeBaseline: true,
 			auths:           s.coreManager.List(),
 		})
+		s.startSessionAffinityPersistence(ctx)
 		interval := 15 * time.Minute
 		s.coreManager.StartAutoRefresh(ctx, interval)
 		log.Infof("core auth auto-refresh started (interval=%s)", interval)
@@ -348,6 +350,12 @@ func (s *Service) Shutdown(ctx context.Context) error {
 			}
 		}
 
+		if s.sessionAffinityPersister != nil {
+			if errPersist := s.sessionAffinityPersister.Stop(ctx); errPersist != nil {
+				log.Warnf("failed to persist session affinity bindings during shutdown: %v", errPersist)
+			}
+		}
+
 		if s.pluginHost != nil {
 			sdktranslator.SetPluginHooks(nil)
 			sdkAuth.RegisterPluginAuthParser(nil)
@@ -369,6 +377,33 @@ func (s *Service) Shutdown(ctx context.Context) error {
 		usage.StopDefault()
 	})
 	return shutdownErr
+}
+
+// startSessionAffinityPersistence restores persisted session bindings and starts saving
+// them periodically. Bindings are stored in the auth directory next to other runtime state.
+// It must run after auths are loaded so bindings to removed credentials are dropped.
+func (s *Service) startSessionAffinityPersistence(ctx context.Context) {
+	if s == nil || s.coreManager == nil || s.cfg == nil || s.cfg.Home.Enabled {
+		return
+	}
+	authDir, errResolve := resolveCooldownStateAuthDir(s.cfg)
+	if errResolve != nil {
+		log.Warnf("failed to resolve session affinity state directory: %v", errResolve)
+		return
+	}
+	if authDir == "" {
+		return
+	}
+	store := coreauth.NewFileSessionAffinityStore(filepath.Join(authDir, coreauth.SessionAffinityStateFileName))
+	persister := coreauth.NewSessionAffinityPersister(s.coreManager, store, coreauth.DefaultSessionAffinityPersistInterval)
+	restored, errRestore := persister.Restore(ctx)
+	if errRestore != nil {
+		log.Warnf("failed to restore session affinity bindings: %v", errRestore)
+	} else if restored > 0 {
+		log.Infof("restored %d session affinity bindings", restored)
+	}
+	persister.Start(ctx)
+	s.sessionAffinityPersister = persister
 }
 
 func (s *Service) ensureAuthDir() error {

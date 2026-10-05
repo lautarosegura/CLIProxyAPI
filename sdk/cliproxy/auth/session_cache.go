@@ -30,6 +30,8 @@ type SessionCache struct {
 	ttl              time.Duration
 	stopCh           chan struct{}
 	stopOnce         sync.Once
+	// version increments on every binding mutation so persistence can skip unchanged saves.
+	version uint64
 }
 
 // NewSessionCache creates a cache with the specified TTL.
@@ -182,6 +184,7 @@ func (c *SessionCache) replaceAliasGroupsLocked(authID string, expiresAt time.Ti
 		c.removeAliasGroupLocked(existing)
 	}
 	entry := sessionEntry{authID: authID, expiresAt: expiresAt, aliases: append([]string(nil), aliases...)}
+	c.version++
 	c.groups[primaryKey] = entry
 	for _, alias := range aliases {
 		c.entries[alias] = entry
@@ -215,6 +218,7 @@ func (c *SessionCache) removeAliasGroupLocked(entry sessionEntry) {
 	}
 	primaryKey := entry.aliases[0]
 	if currentGroup, ok := c.groups[primaryKey]; ok && sameSessionEntryGroup(currentGroup, entry) {
+		c.version++
 		delete(c.groups, primaryKey)
 		if elem, ok := c.evictionElements[primaryKey]; ok {
 			c.evictionOrder.Remove(elem)
@@ -432,6 +436,89 @@ func (c *SessionCache) Len() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return len(c.entries)
+}
+
+// SessionAffinityRecord is a persisted session-to-credential binding. Keys are the opaque
+// cache identifiers (provider, session ID, and model) of one logical session; no request
+// content is stored.
+type SessionAffinityRecord struct {
+	Keys      []string  `json:"keys"`
+	AuthID    string    `json:"auth_id"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+// Version returns a counter that changes whenever a binding is created, refreshed, or removed.
+func (c *SessionCache) Version() uint64 {
+	if c == nil {
+		return 0
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.version
+}
+
+// Snapshot returns the live bindings ordered from least to most recently refreshed, so a
+// restore preserves eviction order. The result is bounded by the cache capacity.
+func (c *SessionCache) Snapshot(now time.Time) []SessionAffinityRecord {
+	if c == nil {
+		return nil
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.evictionOrder == nil {
+		return nil
+	}
+	records := make([]SessionAffinityRecord, 0, len(c.groups))
+	for elem := c.evictionOrder.Front(); elem != nil; elem = elem.Next() {
+		primaryKey, _ := elem.Value.(string)
+		group, ok := c.groups[primaryKey]
+		if !ok || group.authID == "" || len(group.aliases) == 0 || !now.Before(group.expiresAt) {
+			continue
+		}
+		records = append(records, SessionAffinityRecord{
+			Keys:      append([]string(nil), group.aliases...),
+			AuthID:    group.authID,
+			ExpiresAt: group.expiresAt,
+		})
+	}
+	return records
+}
+
+// Restore loads persisted bindings, keeping each entry's remaining lifetime capped by the
+// current TTL. Expired entries are skipped and live bindings already present in the cache
+// win over restored ones. It returns the number of restored bindings.
+func (c *SessionCache) Restore(records []SessionAffinityRecord, now time.Time) int {
+	if c == nil || len(records) == 0 {
+		return 0
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.ensureInitializedLocked()
+	maxExpiresAt := now.Add(c.ttl)
+	restored := 0
+	for _, record := range records {
+		authID := strings.TrimSpace(record.AuthID)
+		if authID == "" || !now.Before(record.ExpiresAt) {
+			continue
+		}
+		aliases := make([]string, 0, len(record.Keys))
+		for _, key := range compactSessionAliases(mergeSessionAliases(nil, record.Keys...)) {
+			if _, exists := c.entries[key]; exists {
+				continue
+			}
+			aliases = append(aliases, key)
+		}
+		if len(aliases) == 0 {
+			continue
+		}
+		expiresAt := record.ExpiresAt
+		if expiresAt.After(maxExpiresAt) {
+			expiresAt = maxExpiresAt
+		}
+		c.replaceAliasGroupsLocked(authID, expiresAt, aliases)
+		restored++
+	}
+	return restored
 }
 
 func (c *SessionCache) cleanup() {

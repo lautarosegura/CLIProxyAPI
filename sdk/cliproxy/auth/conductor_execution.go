@@ -532,7 +532,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 		execCtx = contextWithRequestedModelAlias(execCtx, opts, routeModel)
 		execCtx = newUpstreamAttemptContext(execCtx)
 
-		models, pooled, aliasResult, routing := m.preparedExecutionModelsWithAlias(auth, routeModel)
+		models, pooled, aliasResult, routing := m.preparedExecutionModelsForSelection(auth, routeModel, pickOpts.Metadata)
 		if len(models) == 0 {
 			continue
 		}
@@ -555,7 +555,9 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 		executor = executorForAuth(executor, auth)
 		var authErr error
 		didRefreshOnUnauthorized := false
-		for _, upstreamModel := range models {
+		sticky := m.sessionStickyRetryFor(pickOpts.Metadata, auth)
+		for modelIndex := 0; modelIndex < len(models); modelIndex++ {
+			upstreamModel := models[modelIndex]
 			execCtx = newUpstreamAttemptContext(execCtx)
 			resultModel := m.stateModelForExecution(auth, routeModel, upstreamModel, pooled)
 			execReq := req
@@ -627,6 +629,15 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 			}
 			if errCancel := claudeOAuthRequestCancellation(execCtx, auth, errExec); errCancel != nil {
 				return cliproxyexecutor.Response{}, errCancel
+			}
+			if errExec != nil && m.shouldRetrySessionSticky(sticky, auth, errExec) {
+				stickyResult := Result{AuthID: auth.ID, Provider: provider, Model: resultModel, RouteModel: routeModel, Options: execOpts}
+				if errWait := m.awaitSessionStickyRetry(execCtx, sticky, stickyResult, errExec); errWait != nil {
+					return cliproxyexecutor.Response{}, errWait
+				}
+				// Retry the same upstream model on the bound credential.
+				modelIndex--
+				continue
 			}
 			result := Result{AuthID: auth.ID, Provider: provider, Model: resultModel, RouteModel: routeModel, Success: errExec == nil, Options: execOpts}
 			if errExec != nil {
@@ -744,7 +755,7 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 		execCtx = contextWithRequestedModelAlias(execCtx, opts, routeModel)
 		execCtx = newUpstreamAttemptContext(execCtx)
 
-		models, pooled, aliasResult, routing := m.preparedExecutionModelsWithAlias(auth, routeModel)
+		models, pooled, aliasResult, routing := m.preparedExecutionModelsForSelection(auth, routeModel, pickOpts.Metadata)
 		if len(models) == 0 {
 			continue
 		}
@@ -1060,7 +1071,7 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 		// Enrich before auth preparation so prepare-stage usage records observe the client request.
 		execCtx = contextWithRequestedModelAlias(execCtx, opts, routeModel)
 		execCtx = newUpstreamAttemptContext(execCtx)
-		models, pooled, aliasResult, routing := m.preparedExecutionModelsWithAlias(auth, routeModel)
+		models, pooled, aliasResult, routing := m.preparedExecutionModelsForSelection(auth, routeModel, pickOpts.Metadata)
 		if selection != nil && aliasResult.ForceMapping && responseAlias != "" {
 			aliasResult.OriginalAlias = responseAlias
 		}

@@ -214,7 +214,25 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 	var lastErr error
 	var upstreamErr error
 	didRefreshOnUnauthorized := false
-	for idx, execModel := range execModels {
+	var sticky *sessionStickyRetry
+	if allowRetry && !ephemeralResult {
+		sticky = m.sessionStickyRetryFor(opts.Metadata, auth)
+	}
+	// retrySticky records a transient pre-output failure on the established binding without
+	// cooling the credential, then waits before retrying the same model on the same auth.
+	retrySticky := func(ctx context.Context, err error, resultModel string, execOpts cliproxyexecutor.Options, chunks <-chan cliproxyexecutor.StreamChunk) (bool, error) {
+		if !m.shouldRetrySessionSticky(sticky, auth, err) {
+			return false, nil
+		}
+		discardStreamChunks(chunks)
+		result := Result{AuthID: auth.ID, Provider: provider, Model: resultModel, RouteModel: routeModel, Options: execOpts}
+		if errWait := m.awaitSessionStickyRetry(ctx, sticky, result, err); errWait != nil {
+			return false, errWait
+		}
+		return true, nil
+	}
+	for idx := 0; idx < len(execModels); idx++ {
+		execModel := execModels[idx]
 		ctx = newUpstreamAttemptContext(ctx)
 		resultModel := m.stateModelForExecution(auth, routeModel, execModel, pooled)
 		execReq := req
@@ -287,6 +305,16 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 		streamResult, errStream = validateStreamResult(streamResult, errStream)
 		errStream = markUpstreamExecutionAttemptFromContext(ctx, errStream)
 		if errStream != nil {
+			var pending <-chan cliproxyexecutor.StreamChunk
+			if streamResult != nil {
+				pending = streamResult.Chunks
+			}
+			if retry, errWait := retrySticky(ctx, errStream, resultModel, execOpts, pending); errWait != nil {
+				return nil, errWait
+			} else if retry {
+				idx--
+				continue
+			}
 			rerr := resultErrorFromError(errStream)
 			action, okAction := matchRequestScopedErrorAction(auth, errStream, m.runtimeConfigSnapshot())
 			result := Result{AuthID: auth.ID, Provider: provider, Model: resultModel, RouteModel: routeModel, Success: false, Error: rerr, Options: execOpts}
@@ -372,6 +400,12 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 			}
 		}
 		if bootstrapErr != nil {
+			if retry, errWait := retrySticky(ctx, bootstrapErr, resultModel, execOpts, streamResult.Chunks); errWait != nil {
+				return nil, errWait
+			} else if retry {
+				idx--
+				continue
+			}
 			action, okAction := matchRequestScopedErrorAction(auth, bootstrapErr, m.runtimeConfigSnapshot())
 			if okAction {
 				rerr := resultErrorFromError(bootstrapErr)
@@ -434,6 +468,12 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 
 		if closed && len(buffered) == 0 {
 			emptyErr := markUpstreamExecutionAttemptFromContext(ctx, &Error{Code: "empty_stream", Message: "upstream stream closed before first payload", Retryable: true})
+			if retry, errWait := retrySticky(ctx, emptyErr, resultModel, execOpts, nil); errWait != nil {
+				return nil, errWait
+			} else if retry {
+				idx--
+				continue
+			}
 			currentErr := newStreamBootstrapError(emptyErr, streamResult.Headers)
 			if hasUpstreamExecutionAttempt(emptyErr) {
 				upstreamErr = currentErr

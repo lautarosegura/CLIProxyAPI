@@ -376,6 +376,15 @@ type RoutingConfig struct {
 	// When false, subagents are distributed across the credential pool via the fallback selector.
 	// Default: true. Ignored when SessionAffinity is false.
 	SessionAffinitySubagents *bool `yaml:"session-affinity-subagents,omitempty" json:"session-affinity-subagents,omitempty"`
+
+	// SessionAffinityMaxRetries is the number of additional attempts made on the bound
+	// credential of an established session after a transient upstream failure (5xx, 529,
+	// 408, transport errors) before the request fails over to another credential.
+	// Bound sessions also keep their credential through transient cooldowns and transient
+	// mid-stream errors, which protects per-account prompt caches.
+	// Default: 2. Set to 0 to restore immediate failover. Values above 10 are capped.
+	// Ignored when SessionAffinity is false.
+	SessionAffinityMaxRetries *int `yaml:"session-affinity-max-retries,omitempty" json:"session-affinity-max-retries,omitempty"`
 }
 
 // OAuthModelAlias defines a model ID alias for a specific channel.

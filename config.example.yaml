@@ -168,6 +168,18 @@ routing:
   # for maximum parallel concurrency.
   # Ignored when routing.session-affinity is false.
   session-affinity-subagents: true
+  # Additional attempts on the bound credential of an established session after a transient
+  # upstream failure (5xx, 529 overloaded, 408, transport errors) before failing over, with
+  # exponential backoff (500ms, 1s, ...). Bound sessions also keep their credential through
+  # transient cooldowns and transient mid-stream errors. Quota exhaustion, auth failures and
+  # disabled/removed credentials still fail over immediately. 0 restores immediate failover.
+  # Bindings are persisted to "session-affinity.sab" in the auth directory and survive restarts.
+  # Default: 2. Ignored when routing.session-affinity is false.
+  session-affinity-max-retries: 2
+  # Recommended for protecting per-account prompt caches of long Claude Code / Codex threads:
+  #   session-affinity: true
+  #   session-affinity-ttl: "24h"
+  #   session-affinity-max-retries: 2
 
   # When true, unprefixed model requests only use credentials without a prefix (except when prefix == model name).
   force-model-prefix: false

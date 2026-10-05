@@ -431,6 +431,13 @@ func (m *Manager) SetSelector(selector Selector) {
 		m.mu.Unlock()
 		return
 	}
+	// Carry established session bindings across selector rebuilds (for example when
+	// routing settings change on hot reload) so sessions keep their prompt caches.
+	if oldAffinity, ok := oldSelector.(*SessionAffinitySelector); ok {
+		if newAffinity, okNew := selector.(*SessionAffinitySelector); okNew {
+			newAffinity.adoptBindings(oldAffinity, time.Now())
+		}
+	}
 	m.selector = selector
 	m.mu.Unlock()
 
@@ -1780,7 +1787,9 @@ func (m *Manager) pickNextLegacy(ctx context.Context, provider, model string, op
 		m.mu.RUnlock()
 		return nil, nil, &Error{Code: "auth_not_found", Message: "no auth available"}
 	}
-	available, selectorAuths, errAvailable := m.availableAuthsForSelector(selector, candidates, provider, model, time.Now())
+	now := time.Now()
+	available, selectorAuths, errAvailable := m.availableAuthsForSelector(selector, candidates, provider, model, now)
+	available, selectorAuths, errAvailable = m.includeSessionBoundTransientAuthLocked(selector, candidates, available, selectorAuths, errAvailable, provider, model, opts, now)
 	if errAvailable != nil {
 		m.mu.RUnlock()
 		m.warnLogAuthUnavailable(ctx, []string{provider}, model, opts, tried, errAvailable)
@@ -2114,7 +2123,9 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 		m.mu.RUnlock()
 		return nil, nil, "", &Error{Code: "auth_not_found", Message: "no auth available"}
 	}
-	available, selectorAuths, errAvailable := m.availableAuthsForSelector(selector, candidates, "mixed", model, time.Now())
+	now := time.Now()
+	available, selectorAuths, errAvailable := m.availableAuthsForSelector(selector, candidates, "mixed", model, now)
+	available, selectorAuths, errAvailable = m.includeSessionBoundTransientAuthLocked(selector, candidates, available, selectorAuths, errAvailable, "mixed", model, opts, now)
 	if errAvailable != nil {
 		m.mu.RUnlock()
 		m.warnLogAuthUnavailable(ctx, providers, model, opts, tried, errAvailable)

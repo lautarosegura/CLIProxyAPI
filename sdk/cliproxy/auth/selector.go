@@ -883,6 +883,11 @@ type SessionAffinitySelector struct {
 	cache            *SessionCache
 	matcher          *cliproxysession.MerklePrefixMatcher
 	subagentAffinity bool
+	// maxRetries is the sticky same-credential retry budget for established bindings.
+	// Zero disables all sticky behavior and restores eager failover.
+	maxRetries int
+	// retryWait waits for the sticky retry backoff; tests replace it to avoid real sleeps.
+	retryWait func(ctx context.Context, delay time.Duration) error
 }
 
 // SessionAffinityConfig configures the session affinity selector.
@@ -890,6 +895,9 @@ type SessionAffinityConfig struct {
 	Fallback         Selector
 	TTL              time.Duration
 	SubagentAffinity *bool
+	// MaxRetries is the number of additional attempts on the bound credential of an
+	// established session after a transient failure. Nil uses DefaultSessionAffinityMaxRetries.
+	MaxRetries *int
 }
 
 // NewSessionAffinitySelector creates a new session-aware selector.
@@ -917,6 +925,8 @@ func NewSessionAffinitySelectorWithConfig(cfg SessionAffinityConfig) *SessionAff
 		cache:            NewSessionCache(cfg.TTL),
 		matcher:          cliproxysession.NewMerklePrefixMatcher(cfg.TTL),
 		subagentAffinity: subagentAffinity,
+		maxRetries:       NormalizeSessionAffinityMaxRetries(cfg.MaxRetries),
+		retryWait:        waitSessionStickyRetry,
 	}
 }
 
@@ -946,6 +956,8 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 	}
 	opts.Metadata[cliproxyexecutor.SessionAffinityProviderMetadataKey] = provider
 	opts.Metadata[cliproxyexecutor.SessionAffinityModelMetadataKey] = model
+	// Only a pick that reuses an existing binding marks the request as established.
+	delete(opts.Metadata, sessionAffinityEstablishedAuthMetadataKey)
 
 	// Explicit harness identities are absolute authority. The LCP matcher is only
 	// consulted when no header, body, or execution-session identity is present.
@@ -1029,6 +1041,7 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 		for _, auth := range available {
 			if auth.ID == cachedAuthID {
 				bind(auth.ID)
+				opts.Metadata[sessionAffinityEstablishedAuthMetadataKey] = auth.ID
 				entry.Infof("session-affinity: cache hit | session=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), auth.ID, provider, model)
 				return auth, nil
 			}
@@ -1052,6 +1065,7 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 				if auth.ID == cachedAuthID {
 					if !isSubagent || s.subagentAffinity {
 						bind(auth.ID)
+						opts.Metadata[sessionAffinityEstablishedAuthMetadataKey] = auth.ID
 						if isFork {
 							entry.Infof("session-affinity: fork cache hit | session=%s parent=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), truncateSessionID(fallbackID), auth.ID, provider, model)
 						} else {
@@ -1116,6 +1130,9 @@ func (s *SessionAffinitySelector) pickLCP(ctx context.Context, provider, model s
 		for _, auth := range available {
 			if auth == nil || auth.ID != match.AuthID {
 				continue
+			}
+			if opts.Metadata != nil {
+				opts.Metadata[sessionAffinityEstablishedAuthMetadataKey] = auth.ID
 			}
 			if match.SessionID != "" {
 				opts.Metadata[cliproxyexecutor.LCPAffinitySessionIDMetadataKey] = match.SessionID
@@ -1448,6 +1465,13 @@ func (s *SessionAffinitySelector) OnResult(res Result) {
 	if res.Error != nil && shouldSkipCredentialCooldown(res.Error) {
 		// Request-scoped or caller-attributed failures are not evidence that the
 		// selected credential is unhealthy, so preserve both explicit and LCP bindings.
+		return
+	}
+	if res.Error != nil && s.maxRetries > 0 && !res.CredentialScope && isSessionStickyTransientResultError(res.Error) {
+		// Transient upstream failures (5xx, 529, 408, transport) do not prove that the
+		// bound credential is unable to serve the session. Keep the binding so the next
+		// turn returns to the same account and its prompt cache. In-request failover
+		// still rebinds explicitly when the selector picks another credential.
 		return
 	}
 

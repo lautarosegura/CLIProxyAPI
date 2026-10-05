@@ -301,6 +301,13 @@ func executionResultModel(routeModel, upstreamModel string, pooled bool) string 
 }
 
 func (m *Manager) filterExecutionModels(auth *Auth, routeModel string, candidates []string, pooled bool) []string {
+	return m.filterExecutionModelsWithTolerance(auth, routeModel, candidates, pooled, false)
+}
+
+// filterExecutionModelsWithTolerance drops blocked upstream models. When tolerateTransient
+// is set, models blocked only by a transient-error cooldown are kept; this is reserved for
+// the established binding of a session so it is not moved by unrelated transient failures.
+func (m *Manager) filterExecutionModelsWithTolerance(auth *Auth, routeModel string, candidates []string, pooled bool, tolerateTransient bool) []string {
 	if len(candidates) == 0 {
 		return nil
 	}
@@ -309,12 +316,21 @@ func (m *Manager) filterExecutionModels(auth *Auth, routeModel string, candidate
 	for _, upstreamModel := range candidates {
 		stateModel := m.stateModelForExecution(auth, routeModel, upstreamModel, pooled)
 		blocked, _, _ := isAuthBlockedForModel(auth, stateModel, now)
-		if blocked {
+		if blocked && !(tolerateTransient && isAuthOnlyTransientlyCooledForModel(auth, stateModel, now)) {
 			continue
 		}
 		out = append(out, upstreamModel)
 	}
 	return out
+}
+
+// preparedExecutionModelsForSelection resolves execution models for a picked auth. The
+// established session binding tolerates transient-error cooldowns (see
+// includeSessionBoundTransientAuthLocked); every other pick uses regular filtering.
+func (m *Manager) preparedExecutionModelsForSelection(auth *Auth, routeModel string, metadata map[string]any) ([]string, bool, OAuthModelAliasResult, *apiKeyModelRoutingSnapshot) {
+	candidates, pooled, aliasResult, routing := m.executionModelCandidatesWithAlias(auth, routeModel)
+	tolerateTransient := m.sessionStickyRetryFor(metadata, auth) != nil
+	return m.filterExecutionModelsWithTolerance(auth, routeModel, candidates, pooled, tolerateTransient), pooled, aliasResult, routing
 }
 
 func (m *Manager) preparedExecutionModels(auth *Auth, routeModel string) ([]string, bool) {
