@@ -198,34 +198,7 @@ func writeCooldownStateGroup(ctx context.Context, path string, records []Cooldow
 		return fmt.Errorf("marshal cooldown state: %w", errMarshal)
 	}
 	data = append(data, '\n')
-
-	dir := filepath.Dir(path)
-	if errMkdir := os.MkdirAll(dir, 0o700); errMkdir != nil {
-		return fmt.Errorf("create cooldown state directory: %w", errMkdir)
-	}
-
-	tmpFile, errCreate := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
-	if errCreate != nil {
-		return fmt.Errorf("create cooldown state temp file: %w", errCreate)
-	}
-	tmp := tmpFile.Name()
-	if _, errWrite := tmpFile.Write(data); errWrite != nil {
-		if errClose := tmpFile.Close(); errClose != nil {
-			_ = os.Remove(tmp)
-			return fmt.Errorf("write cooldown state temp file: %w; close temp file: %v", errWrite, errClose)
-		}
-		_ = os.Remove(tmp)
-		return fmt.Errorf("write cooldown state temp file: %w", errWrite)
-	}
-	if errClose := tmpFile.Close(); errClose != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("close cooldown state temp file: %w", errClose)
-	}
-	if errRename := os.Rename(tmp, path); errRename != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("replace cooldown state file: %w", errRename)
-	}
-	return nil
+	return writeStateFileAtomic(path, data, "cooldown state")
 }
 
 func (s *FileCooldownStateStore) removeAllStateFiles(ctx context.Context) error {

@@ -99,6 +99,9 @@ type Service struct {
 	// cooldownStateStore persists runtime cooldown state when enabled.
 	cooldownStateStore coreauth.CooldownStateStore
 
+	// sessionAffinityPersister saves session affinity bindings across restarts.
+	sessionAffinityPersister *coreauth.SessionAffinityPersister
+
 	// pluginHost owns dynamic plugin lifecycle and runtime capability adapters.
 	pluginHost *pluginhost.Host
 

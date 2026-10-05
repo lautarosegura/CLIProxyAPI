@@ -106,8 +106,9 @@ func TestManagerSessionAffinityMixedPoolNilMetadataPropagatesFailureCleanup(t *t
 		t.Fatalf("expected test initial opts.Metadata to be nil")
 	}
 
-	// 1. Execute request: auth-1 is selected, fails, Result carries propagated "mixed" affinity namespace,
-	// MarkResult unbinds "mixed::sess-mixed-1::test-model", and execution falls over to auth-2 which succeeds.
+	// 1. Execute request: auth-1 is selected for a cold (not yet established) binding and fails.
+	// Cold bindings get no sticky retries, so execution falls over to auth-2, which succeeds and
+	// rebinds "mixed::sess-mixed-1::test-model" under the propagated "mixed" namespace.
 	resp, errExec := manager.Execute(ctx, []string{p1, p2}, req, opts)
 	if errExec != nil {
 		t.Fatalf("first Execute failed: %v", errExec)
@@ -247,13 +248,14 @@ func TestSessionAffinityOnResultWithMismatchedNamespaceFailsToUnbind(t *testing.
 	mixedKey := "mixed::" + sessionID + "::" + model
 	affinity.cache.Set(mixedKey, authID)
 
-	// Call OnResult with options carrying the propagated "mixed" namespace
+	// Call OnResult with options carrying the propagated "mixed" namespace. A genuine
+	// credential failure (403) is used because transient 5xx failures keep the binding.
 	res := Result{
 		AuthID:   authID,
 		Provider: "gemini", // actual provider
 		Model:    model,
 		Success:  false,
-		Error:    &Error{HTTPStatus: http.StatusInternalServerError},
+		Error:    &Error{HTTPStatus: http.StatusForbidden},
 		Options: cliproxyexecutor.Options{
 			Headers: http.Header{"X-Session-Id": []string{"sess-ns-1"}},
 			Metadata: map[string]any{

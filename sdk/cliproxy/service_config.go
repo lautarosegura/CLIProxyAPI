@@ -30,6 +30,7 @@ type routingRuntimeState struct {
 	sessionAffinity          bool
 	sessionAffinityTTL       time.Duration
 	sessionAffinitySubagents bool
+	sessionAffinityMaxRetry  int
 }
 
 func normalizedRoutingRuntimeState(cfg *config.Config) routingRuntimeState {
@@ -37,6 +38,7 @@ func normalizedRoutingRuntimeState(cfg *config.Config) routingRuntimeState {
 		strategy:                 "round-robin",
 		sessionAffinityTTL:       time.Hour,
 		sessionAffinitySubagents: true,
+		sessionAffinityMaxRetry:  coreauth.DefaultSessionAffinityMaxRetries,
 	}
 	if cfg == nil {
 		return state
@@ -60,6 +62,9 @@ func normalizedRoutingRuntimeState(cfg *config.Config) routingRuntimeState {
 	if state.sessionAffinity && cfg.Routing.SessionAffinitySubagents != nil {
 		state.sessionAffinitySubagents = *cfg.Routing.SessionAffinitySubagents
 	}
+	if state.sessionAffinity {
+		state.sessionAffinityMaxRetry = coreauth.NormalizeSessionAffinityMaxRetries(cfg.Routing.SessionAffinityMaxRetries)
+	}
 	return state
 }
 
@@ -75,10 +80,12 @@ func newRoutingSelector(state routingRuntimeState) coreauth.Selector {
 	}
 	if state.sessionAffinity {
 		subagents := state.sessionAffinitySubagents
+		maxRetries := state.sessionAffinityMaxRetry
 		selector = coreauth.NewSessionAffinitySelectorWithConfig(coreauth.SessionAffinityConfig{
 			Fallback:         selector,
 			TTL:              state.sessionAffinityTTL,
 			SubagentAffinity: &subagents,
+			MaxRetries:       &maxRetries,
 		})
 	}
 	return selector
