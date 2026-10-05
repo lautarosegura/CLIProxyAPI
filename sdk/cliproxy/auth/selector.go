@@ -410,38 +410,6 @@ func canonicalModelKey(model string) string {
 	return modelName
 }
 
-func authWebsocketsEnabled(auth *Auth) bool {
-	if auth == nil {
-		return false
-	}
-	if len(auth.Attributes) > 0 {
-		if raw := strings.TrimSpace(auth.Attributes["websockets"]); raw != "" {
-			parsed, errParse := strconv.ParseBool(raw)
-			if errParse == nil {
-				return parsed
-			}
-		}
-	}
-	if len(auth.Metadata) == 0 {
-		return false
-	}
-	raw, ok := auth.Metadata["websockets"]
-	if !ok || raw == nil {
-		return false
-	}
-	switch v := raw.(type) {
-	case bool:
-		return v
-	case string:
-		parsed, errParse := strconv.ParseBool(strings.TrimSpace(v))
-		if errParse == nil {
-			return parsed
-		}
-	default:
-	}
-	return false
-}
-
 func preferCodexWebsocketAuths(ctx context.Context, provider string, available []*Auth) []*Auth {
 	if len(available) == 0 {
 		return available
@@ -453,10 +421,11 @@ func preferCodexWebsocketAuths(ctx context.Context, provider string, available [
 		return available
 	}
 
+	codexDefault := codexWebsocketsDefaultFromContext(ctx)
 	wsEnabled := make([]*Auth, 0, len(available))
 	for i := 0; i < len(available); i++ {
 		candidate := available[i]
-		if authWebsocketsEnabled(candidate) {
+		if WebsocketsEnabled(candidate, codexDefault) {
 			wsEnabled = append(wsEnabled, candidate)
 		}
 	}

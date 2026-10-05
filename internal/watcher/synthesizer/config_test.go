@@ -314,7 +314,7 @@ func TestConfigSynthesizer_CodexKeys(t *testing.T) {
 					Prefix:               "dev",
 					BaseURL:              "https://api.openai.com",
 					ProxyURL:             "http://proxy.local",
-					Websockets:           true,
+					Websockets:           boolPointer(true),
 					AlphaSearch:          true,
 					DisableCooling:       boolPointer(true),
 					DisableCodexCloaking: boolPointer(true),
@@ -356,6 +356,47 @@ func TestConfigSynthesizer_CodexKeys(t *testing.T) {
 	}
 }
 
+func TestConfigSynthesizer_CodexKeysWebsocketsOverride(t *testing.T) {
+	synth := NewConfigSynthesizer()
+	ctx := &SynthesisContext{
+		Config: &config.Config{
+			Codex: config.CodexConfig{Websockets: true},
+			CodexKey: []config.CodexKey{
+				{APIKey: "inherit-key", BaseURL: "https://api.openai.com"},
+				{APIKey: "http-key", BaseURL: "https://api.openai.com", Websockets: boolPointer(false)},
+			},
+		},
+		Now:         time.Now(),
+		IDGenerator: NewStableIDGenerator(),
+	}
+
+	auths, err := synth.Synthesize(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(auths) != 2 {
+		t.Fatalf("expected 2 auths, got %d", len(auths))
+	}
+	byKey := make(map[string]*coreauth.Auth, len(auths))
+	for _, auth := range auths {
+		byKey[auth.Attributes["api_key"]] = auth
+	}
+	inherit := byKey["inherit-key"]
+	if _, ok := inherit.Attributes[coreauth.AttributeWebsockets]; ok {
+		t.Fatalf("omitted websockets must not be stamped, got %q", inherit.Attributes[coreauth.AttributeWebsockets])
+	}
+	if !coreauth.WebsocketsEnabled(inherit, coreauth.CodexWebsocketsDefault(ctx.Config)) {
+		t.Fatal("key without websockets must inherit upstream.codex.websockets=true")
+	}
+	httpOnly := byKey["http-key"]
+	if httpOnly.Attributes[coreauth.AttributeWebsockets] != "false" {
+		t.Fatalf("explicit websockets=false must be stamped, got %q", httpOnly.Attributes[coreauth.AttributeWebsockets])
+	}
+	if coreauth.WebsocketsEnabled(httpOnly, coreauth.CodexWebsocketsDefault(ctx.Config)) {
+		t.Fatal("explicit websockets=false must override upstream.codex.websockets=true")
+	}
+}
+
 func TestConfigSynthesizer_XAIKeys(t *testing.T) {
 	synth := NewConfigSynthesizer()
 	ctx := &SynthesisContext{
@@ -365,7 +406,7 @@ func TestConfigSynthesizer_XAIKeys(t *testing.T) {
 				Prefix:         "grok",
 				BaseURL:        "https://api.x.ai/v1",
 				ProxyURL:       "http://proxy.local",
-				Websockets:     true,
+				Websockets:     boolPointer(true),
 				AlphaSearch:    true,
 				DisableCooling: boolPointer(true),
 				Headers:        map[string]string{"X-Custom": "value"},

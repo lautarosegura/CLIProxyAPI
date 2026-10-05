@@ -21,6 +21,7 @@ func TestConfigV8HistoricalFieldPaths(t *testing.T) {
 		{"oauth/providers/codex/orphan-delegation-compatibility", "upstream/codex/orphan-delegation-compatibility", "true"},
 		{"oauth/providers/codex/model-level-cooling", "upstream/codex/model-level-cooling", "true"},
 		{"oauth/providers/codex/response-steering", "upstream/codex/response-steering", "true"},
+		{"oauth/providers/codex/websockets", "upstream/codex/websockets", "true"},
 		{"oauth/providers/claude/model-level-cooling", "upstream/claude/model-level-cooling", "true"},
 		{"oauth/providers/claude/disable-claude-cloak-mode", "upstream/claude/disable-claude-cloak-mode", "true"},
 		{"oauth/providers/claude/header-defaults/user-agent", "upstream/claude/header-defaults/user-agent", `"test-agent"`},

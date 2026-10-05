@@ -143,6 +143,9 @@ func BuildConfigChangeDetails(oldCfg, newCfg *config.Config) []string {
 	if oldCfg.Codex.DisableCodexCloaking != newCfg.Codex.DisableCodexCloaking {
 		changes = append(changes, fmt.Sprintf("codex.disable-codex-cloaking: %t -> %t", oldCfg.Codex.DisableCodexCloaking, newCfg.Codex.DisableCodexCloaking))
 	}
+	if oldCfg.Codex.Websockets != newCfg.Codex.Websockets {
+		changes = append(changes, fmt.Sprintf("codex.websockets: %t -> %t", oldCfg.Codex.Websockets, newCfg.Codex.Websockets))
+	}
 	if oldCfg.Codex.StreamBootstrapBuffering != newCfg.Codex.StreamBootstrapBuffering {
 		changes = append(changes, fmt.Sprintf("codex.stream-bootstrap-buffering: %t -> %t", oldCfg.Codex.StreamBootstrapBuffering, newCfg.Codex.StreamBootstrapBuffering))
 	}
@@ -336,9 +339,7 @@ func BuildConfigChangeDetails(oldCfg, newCfg *config.Config) []string {
 			if strings.TrimSpace(o.Prefix) != strings.TrimSpace(n.Prefix) {
 				changes = append(changes, fmt.Sprintf("codex[%d].prefix: %s -> %s", i, strings.TrimSpace(o.Prefix), strings.TrimSpace(n.Prefix)))
 			}
-			if o.Websockets != n.Websockets {
-				changes = append(changes, fmt.Sprintf("codex[%d].websockets: %t -> %t", i, o.Websockets, n.Websockets))
-			}
+			changes = appendOptionalBoolChange(changes, fmt.Sprintf("codex[%d].websockets", i), o.Websockets, n.Websockets)
 			if o.AlphaSearch != n.AlphaSearch {
 				changes = append(changes, fmt.Sprintf("codex[%d].alpha-search: %t -> %t", i, o.AlphaSearch, n.AlphaSearch))
 			}
@@ -383,9 +384,7 @@ func BuildConfigChangeDetails(oldCfg, newCfg *config.Config) []string {
 			if o.Priority != n.Priority {
 				changes = append(changes, fmt.Sprintf("xai[%d].priority: %d -> %d", i, o.Priority, n.Priority))
 			}
-			if o.Websockets != n.Websockets {
-				changes = append(changes, fmt.Sprintf("xai[%d].websockets: %t -> %t", i, o.Websockets, n.Websockets))
-			}
+			changes = appendOptionalBoolChange(changes, fmt.Sprintf("xai[%d].websockets", i), o.Websockets, n.Websockets)
 			changes = appendOptionalBoolChange(changes, fmt.Sprintf("xai[%d].disable-cooling", i), o.DisableCooling, n.DisableCooling)
 			changes = appendOptionalIntChange(changes, fmt.Sprintf("xai[%d].request-retry", i), o.RequestRetry, n.RequestRetry)
 			if strings.TrimSpace(o.APIKey) != strings.TrimSpace(n.APIKey) {

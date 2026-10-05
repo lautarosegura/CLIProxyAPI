@@ -147,6 +147,74 @@ func TestSharedUpstreamPresenceWinsOverHistoricalAliases(t *testing.T) {
 	}
 }
 
+func TestCodexWebsocketsDefaultIsSharedAcrossOAuthAndAPIKeys(t *testing.T) {
+	keys := "api-keys: {codex: [{base-url: https://example.invalid, keys: [{api-key: inherit-key}, {api-key: http-key, websockets: false}, {api-key: ws-key, websockets: true}]}]}\n"
+	for _, tc := range []struct{ name, raw string }{
+		{"legacy", "codex: {websockets: true}\n" + keys},
+		{"upstream", "upstream: {codex: {websockets: true}}\n" + keys},
+		{"historical OAuth", "oauth: {providers: {codex: {websockets: true}}}\n" + keys},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			check := func(stage string, cfg *Config) {
+				t.Helper()
+				for _, scoped := range []*Config{cfg, cfg.CloneForRuntime(), cfg.ForAPIKey(), cfg.CloneForRuntime().ForAPIKey()} {
+					if !scoped.Codex.Websockets {
+						t.Fatalf("%s: upstream.codex.websockets lost for a scope", stage)
+					}
+				}
+				if len(cfg.CodexKey) != 3 {
+					t.Fatalf("%s: codex keys = %d, want 3", stage, len(cfg.CodexKey))
+				}
+				if cfg.CodexKey[0].Websockets != nil {
+					t.Fatalf("%s: omitted key websockets = %v, want nil (inherit)", stage, *cfg.CodexKey[0].Websockets)
+				}
+				if got := cfg.CodexKey[1].Websockets; got == nil || *got {
+					t.Fatalf("%s: explicit key websockets=false lost: %v", stage, got)
+				}
+				if got := cfg.CodexKey[2].Websockets; got == nil || !*got {
+					t.Fatalf("%s: explicit key websockets=true lost: %v", stage, got)
+				}
+			}
+
+			cfg, errParse := ParseConfigBytes([]byte(tc.raw))
+			if errParse != nil {
+				t.Fatal(errParse)
+			}
+			check("parse", cfg)
+
+			migrated, _, errMigrate := NormalizeConfigLayout([]byte(tc.raw), true)
+			if errMigrate != nil {
+				t.Fatal(errMigrate)
+			}
+			if errValidate := ValidateV8Config(migrated); errValidate != nil {
+				t.Fatal(errValidate)
+			}
+			var doc yaml.Node
+			if errDecode := yaml.Unmarshal(migrated, &doc); errDecode != nil {
+				t.Fatal(errDecode)
+			}
+			if yamlPath(doc.Content[0], "upstream.codex.websockets") == nil || yamlPath(doc.Content[0], "oauth.providers.codex.websockets") != nil {
+				t.Fatalf("websockets default was not migrated to upstream.codex: %s", migrated)
+			}
+			restored, errParse := ParseConfigBytes(migrated)
+			if errParse != nil {
+				t.Fatal(errParse)
+			}
+			check("migrated", restored)
+
+			snapshot, errMarshal := yaml.Marshal(cfg)
+			if errMarshal != nil {
+				t.Fatal(errMarshal)
+			}
+			fromSnapshot, errParse := ParseConfigBytes(snapshot)
+			if errParse != nil {
+				t.Fatal(errParse)
+			}
+			check("snapshot", fromSnapshot)
+		})
+	}
+}
+
 func TestSharedUpstreamEmptyHistoricalContainers(t *testing.T) {
 	for _, tc := range []struct{ historical, current string }{
 		{"oauth.providers.claude.header-defaults", "upstream.claude.header-defaults"},

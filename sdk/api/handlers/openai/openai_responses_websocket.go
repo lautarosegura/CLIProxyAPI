@@ -373,7 +373,7 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 		return auth, ok
 	}
 	upstreamModeForAuth := func(auth *coreauth.Auth) string {
-		if auth != nil && websocketUpstreamSupportsIncrementalInput(auth.Attributes, auth.Metadata) {
+		if auth != nil && h.responsesWebsocketAuthSupportsIncrementalInput(auth) {
 			provider := strings.ToLower(strings.TrimSpace(auth.Provider))
 			if provider == "codex" || provider == "xai" {
 				return responsesWebsocketUpstreamModeWS
@@ -486,7 +486,7 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 		}
 		useUpstreamWebsocketPassthrough := h.responsesWebsocketUsesUpstreamWebsocketPassthrough(requestModelName)
 		if pinnedAuthID != "" {
-			if pinnedAuth, ok := sessionAuthByID(pinnedAuthID); ok && responsesWebsocketAuthSupportsIncrementalInput(pinnedAuth) {
+			if pinnedAuth, ok := sessionAuthByID(pinnedAuthID); ok && h.responsesWebsocketAuthSupportsIncrementalInput(pinnedAuth) {
 				provider := strings.ToLower(strings.TrimSpace(pinnedAuth.Provider))
 				useUpstreamWebsocketPassthrough = provider == "codex" || provider == "xai"
 			}

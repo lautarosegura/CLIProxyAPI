@@ -261,18 +261,33 @@ func TestBuildConfigChangeDetails_CodexOrphanDelegationCompatibility(t *testing.
 	expectContains(t, changes, "codex.orphan-delegation-compatibility: false -> true")
 }
 
+func TestBuildConfigChangeDetails_CodexWebsockets(t *testing.T) {
+	disabled := false
+	oldCfg := &config.Config{CodexKey: []config.CodexKey{{APIKey: "k", BaseURL: "https://example.com"}}}
+	newCfg := &config.Config{
+		Codex:    config.CodexConfig{Websockets: true},
+		CodexKey: []config.CodexKey{{APIKey: "k", BaseURL: "https://example.com", Websockets: &disabled}},
+	}
+
+	changes := BuildConfigChangeDetails(oldCfg, newCfg)
+	expectContains(t, changes, "codex.websockets: false -> true")
+	expectContains(t, changes, "codex[0].websockets: inherit -> false")
+}
+
 func TestBuildConfigChangeDetails_XAIKeys(t *testing.T) {
 	oldRetry := 1
 	newRetry := 0
 	oldDisableCooling := false
 	newDisableCooling := true
+	oldWebsockets := false
+	newWebsockets := true
 	oldCfg := &config.Config{XAIKey: []config.XAIKey{{
 		APIKey:         "old-key",
 		Priority:       1,
 		Prefix:         "old",
 		BaseURL:        "https://old.example.com/v1",
 		ProxyURL:       "http://old-proxy",
-		Websockets:     false,
+		Websockets:     &oldWebsockets,
 		DisableCooling: &oldDisableCooling,
 		RequestRetry:   &oldRetry,
 		Headers:        map[string]string{"X-Test": "old"},
@@ -285,7 +300,7 @@ func TestBuildConfigChangeDetails_XAIKeys(t *testing.T) {
 		Prefix:         "new",
 		BaseURL:        "https://new.example.com/v1",
 		ProxyURL:       "http://new-proxy",
-		Websockets:     true,
+		Websockets:     &newWebsockets,
 		DisableCooling: &newDisableCooling,
 		RequestRetry:   &newRetry,
 		Headers:        map[string]string{"X-Test": "new"},

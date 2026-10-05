@@ -1848,36 +1848,10 @@ func (e *XAIAutoExecutor) UpstreamDisconnectChan(sessionID string) <-chan error 
 	return e.wsExec.UpstreamDisconnectChan(sessionID)
 }
 
+// xaiWebsocketsEnabled reports the xAI credential's explicit websocket flag; xAI has no global default.
 func xaiWebsocketsEnabled(auth *cliproxyauth.Auth) bool {
-	if auth == nil {
-		return false
-	}
-	if len(auth.Attributes) > 0 {
-		if raw := strings.TrimSpace(auth.Attributes["websockets"]); raw != "" {
-			parsed, errParse := strconv.ParseBool(raw)
-			if errParse == nil {
-				return parsed
-			}
-		}
-	}
-	if len(auth.Metadata) == 0 {
-		return false
-	}
-	raw, ok := auth.Metadata["websockets"]
-	if !ok || raw == nil {
-		return false
-	}
-	switch v := raw.(type) {
-	case bool:
-		return v
-	case string:
-		parsed, errParse := strconv.ParseBool(strings.TrimSpace(v))
-		if errParse == nil {
-			return parsed
-		}
-	default:
-	}
-	return false
+	enabled, _ := cliproxyauth.ExplicitWebsockets(auth)
+	return enabled
 }
 
 // SupportsApplyPatch requires both selectable transports to support the tool.
