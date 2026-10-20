@@ -91,10 +91,32 @@ The proxy is the default; the native login stays available as a bypass.
 
   Bypass profile `~/.codex/oauth.config.toml`: `model_provider = "openai"`.
 
+- **Grok Build** (CLI and T3 Code), `~/.grok/config.toml`:
+
+  ```toml
+  [auth]
+  auth_provider_command = "secret-tool lookup service cliproxy-client-key"
+  auth_provider_label = "CLIProxyAPI"
+  auth_token_ttl = 86400
+
+  [endpoints]
+  models_base_url = "http://127.0.0.1:8317/v1"
+
+  # The proxy lists every provider's models; keep Grok's native default.
+  [models]
+  default = "grok-4.7"
+  ```
+
+  A `grok.com` login session in `~/.grok/auth.json` wins over the auth provider,
+  so that file must hold only the token the provider writes there, never a
+  session. The native login lives in a separate home, `~/.grok-native`, with the
+  original config.
+
 - **Bypass commands**, `~/.zshrc`:
 
   ```bash
   alias cxo="codex --yolo -p oauth"
   claudeo() { env -u ANTHROPIC_BASE_URL -u ANTHROPIC_CUSTOM_HEADERS claude "$@"; }
   alias clo="claudeo --dangerously-skip-permissions"
+  groko() { GROK_HOME="$HOME/.grok-native" grok "$@"; }
   ```
