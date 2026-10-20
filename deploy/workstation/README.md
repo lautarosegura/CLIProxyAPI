@@ -107,9 +107,10 @@ The proxy is the default; the native login stays available as a bypass.
   default = "grok-4.7"
   ```
 
-  A `grok.com` session in `~/.grok/auth.json` wins over the auth provider, so
-  that file must not hold one (the provider writes its token there). The native
-  login lives in a separate home, `~/.grok-native`, with the original config.
+  A `grok.com` login session in `~/.grok/auth.json` wins over the auth provider,
+  so that file must hold only the token the provider writes there, never a
+  session. The native login lives in a separate home, `~/.grok-native`, with the
+  original config.
 
 - **Bypass commands**, `~/.zshrc`:
 
