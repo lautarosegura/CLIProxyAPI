@@ -2,6 +2,7 @@ package usageledger
 
 import (
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -112,5 +113,36 @@ func TestTokensFromRecordUsesCanonicalBreakdown(t *testing.T) {
 	}
 	if _, ok := tokensFromRecord(coreusage.Record{Provider: "claude", Failed: true}); ok {
 		t.Fatal("failed request without tokens should be skipped")
+	}
+}
+
+func TestConcurrentSavesKeepNewestState(t *testing.T) {
+	now := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
+	l := newTestLedger(t, now)
+	const writers = 50
+	var wg sync.WaitGroup
+	for i := 0; i < writers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			l.Record(now, "codex", "gpt-6.1-sol", Tokens{Requests: 1, InputTokens: 1})
+			if errSave := l.Save(); errSave != nil {
+				t.Error(errSave)
+			}
+		}()
+	}
+	wg.Wait()
+	if errSave := l.Save(); errSave != nil {
+		t.Fatal(errSave)
+	}
+
+	loaded := New(l.path)
+	loaded.now = l.now
+	if errLoad := loaded.Load(); errLoad != nil {
+		t.Fatal(errLoad)
+	}
+	got := loaded.DailyTotals(1, 0)
+	if len(got) != 1 || got[0].Requests != writers {
+		t.Fatalf("persisted totals lost updates: %+v", got)
 	}
 }

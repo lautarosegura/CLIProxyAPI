@@ -95,7 +95,9 @@ type stateFile struct {
 
 // Ledger is a concurrency-safe hourly usage aggregate backed by a single file.
 type Ledger struct {
-	mu        sync.Mutex
+	mu sync.Mutex
+	// saveMu serializes Save so an older snapshot never replaces a newer file.
+	saveMu    sync.Mutex
 	path      string
 	startedAt time.Time
 	buckets   map[bucketKey]*Tokens
@@ -244,6 +246,8 @@ func (l *Ledger) Save() error {
 	if l.path == "" {
 		return nil
 	}
+	l.saveMu.Lock()
+	defer l.saveMu.Unlock()
 	l.mu.Lock()
 	if !l.dirty {
 		l.mu.Unlock()

@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/usageledger"
+	log "github.com/sirupsen/logrus"
 )
 
 const defaultUsageHistoryDays = 30
@@ -67,7 +68,8 @@ func (h *Handler) PutUsageHistoryImport(c *gin.Context) {
 	}
 	accepted, dropped := ledger.ReplaceImported(req.Buckets)
 	if errSave := ledger.Save(); errSave != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": errSave.Error()})
+		log.Errorf("usage history import: %v", errSave)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save usage history"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"accepted": accepted, "dropped": dropped})
