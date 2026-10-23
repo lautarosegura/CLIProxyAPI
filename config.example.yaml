@@ -1127,7 +1127,9 @@ observability:
     request-log: false
 
   usage:
-    # When false, disable in-memory usage statistics aggregation
+    # When false, disable in-memory usage statistics aggregation.
+    # When true, token usage is also kept as hourly totals in <auth-dir>/usage-ledger.ulg
+    # (400 days) and served at GET /v8/management/observability/usage/history.
     usage-statistics-enabled: false
 
     # How long (in seconds) usage queue items are retained in memory for the Management API.

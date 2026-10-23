@@ -12,6 +12,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/home"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/redisqueue"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/usageledger"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v8/sdk/access"
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v8/sdk/auth"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
@@ -95,6 +96,7 @@ func (s *Service) Run(ctx context.Context) error {
 			auths:           s.coreManager.List(),
 		})
 		s.startSessionAffinityPersistence(ctx)
+		s.startUsageLedger(ctx)
 		interval := 15 * time.Minute
 		s.coreManager.StartAutoRefresh(ctx, interval)
 		log.Infof("core auth auto-refresh started (interval=%s)", interval)
@@ -356,6 +358,13 @@ func (s *Service) Shutdown(ctx context.Context) error {
 			}
 		}
 
+		if s.usageLedger != nil {
+			usageledger.SetActive(nil)
+			if errSave := s.usageLedger.Save(); errSave != nil {
+				log.Warnf("failed to persist usage ledger during shutdown: %v", errSave)
+			}
+		}
+
 		if s.pluginHost != nil {
 			sdktranslator.SetPluginHooks(nil)
 			sdkAuth.RegisterPluginAuthParser(nil)
@@ -404,6 +413,30 @@ func (s *Service) startSessionAffinityPersistence(ctx context.Context) {
 	}
 	persister.Start(ctx)
 	s.sessionAffinityPersister = persister
+}
+
+// startUsageLedger restores the hourly usage ledger from the auth directory and
+// saves it periodically. Recording is gated by `usage-statistics-enabled`.
+func (s *Service) startUsageLedger(ctx context.Context) {
+	if s == nil || s.cfg == nil || s.cfg.Home.Enabled {
+		return
+	}
+	authDir, errResolve := resolveCooldownStateAuthDir(s.cfg)
+	if errResolve != nil || authDir == "" {
+		if errResolve != nil {
+			log.Warnf("failed to resolve usage ledger directory: %v", errResolve)
+		}
+		return
+	}
+	ledger := usageledger.New(filepath.Join(authDir, usageledger.FileName))
+	if errLoad := ledger.Load(); errLoad != nil {
+		// Keep the unreadable file untouched instead of overwriting history.
+		log.Warnf("usage ledger disabled: %v", errLoad)
+		return
+	}
+	usageledger.SetActive(ledger)
+	s.usageLedger = ledger
+	go ledger.Run(ctx, time.Minute)
 }
 
 func (s *Service) ensureAuthDir() error {

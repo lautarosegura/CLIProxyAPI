@@ -20,3 +20,7 @@ routing:
 upstream:
   codex:
     websockets: true
+observability:
+  usage:
+    # Feeds the panel's token usage chart (auths/usage-ledger.ulg).
+    usage-statistics-enabled: true
