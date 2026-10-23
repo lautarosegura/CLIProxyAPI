@@ -13,7 +13,7 @@ not in this directory; see [Secrets](#secrets).
 ├── data/
 │   ├── config.yaml        # from ./config.example.yaml, placeholders filled in
 │   └── static/management.html   # panel, downloaded by the server
-└── auths/                 # OAuth credentials + session-affinity.sab
+└── auths/                 # OAuth credentials, session-affinity.sab, usage-ledger.ulg
 ```
 
 ## Fresh setup
@@ -49,6 +49,22 @@ not in this directory; see [Secrets](#secrets).
   gh release download <tag> -R lautarosegura/Cli-Proxy-API-Management-Center -p management.html -D /tmp
   docker cp /tmp/management.html cli-proxy-api:/CLIProxyAPI/data/static/management.html
   ```
+
+## Token usage history
+
+With `observability.usage.usage-statistics-enabled: true` the server keeps
+hourly token totals in `auths/usage-ledger.ulg`, which the panel's quota page
+charts. To backfill the days before the ledger existed from this machine's
+Codex (`~/.codex/sessions`) and Claude Code (`~/.claude/projects`) logs:
+
+```bash
+go run ./cmd/import_session_usage -dry-run   # totals only
+(set -a; . ~/cliproxy/.secrets; go run ./cmd/import_session_usage)
+```
+
+Each run replaces the previous import. Hours at or after the ledger's first
+recorded request are dropped, so traffic is never counted twice; usage that
+bypassed the proxy after that point (`cxo`, `claudeo`) is not included.
 
 ## Secrets
 
